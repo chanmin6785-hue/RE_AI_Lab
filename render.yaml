@@ -1,0 +1,13 @@
+# Free deployment. The instance sleeps when idle and its files are temporary.
+services:
+  - type: web
+    name: ai-re-lab-chanmin6785
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: BAZE_LAB_OWNER_PASSWORD
+        sync: false
+      - key: BAZE_LAB_FRIEND_PASSWORD
+        sync: false
+
