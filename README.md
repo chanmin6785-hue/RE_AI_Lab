@@ -96,7 +96,7 @@ GitHub에 코드를 올릴 수는 있지만, [GitHub Pages는 Python 서버를 �
 | `BAZE_LAB_MEMBER3_PASSWORD` | `member3` |
 | `BAZE_LAB_MEMBER4_PASSWORD` | `member4` |
 
-이미 만든 Render Blueprint에 새 암호 변수 두 개를 추가했다면, `sync: false` 변수는 다시 묻지 않으므로 서비스의 **Environment**에서 직접 입력하고 **Save and deploy**를 선택해야 합니다.
+이미 만든 Render Blueprint에 새 암호 변수 두 개를 추가했다면, `sync: false` 변수는 다시 묻지 않으므로 서비스의 **Environment**에서 직접 입력하고 **Save only**로 저장하세요. 이어 **Deploys → Manual Deploy → Deploy latest commit**을 선택해야 GitHub의 네 명 버전과 새 암호가 함께 적용됩니다.
 
 연구 파일을 재배포·재시작 뒤에도 보존하려면 호스트의 **영구 저장 디스크**를 붙이고 `BAZE_LAB_PROJECTS_DIR`을 해당 디스크의 `projects` 폴더로 지정해야 합니다. 예를 들어 디스크가 `/data`에 붙었다면 `/data/projects`입니다. 디스크 없이 실행하면 호스트가 재시작할 때 자료가 사라질 수 있습니다. 앱은 BAZE 키를 메모리에만 보관하므로 서버가 재시작하면 네 사람이 키를 다시 연결해야 합니다. 진행 중이던 모델 호출도 재시작 시 이어지지 않습니다.
 
