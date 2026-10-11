@@ -1,0 +1,21 @@
+# Do not publish private research conversations or uploaded datasets.
+projects/
+
+# Local tunnel binary and Python caches.
+tools/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+re_test_*/
+
+# Credentials and local environment files.
+.env
+.env.*
+*.key
+*.pem
+*.log
+*.sqlite
+*.sqlite3
+
