@@ -27,7 +27,11 @@ ROOT = Path(__file__).resolve().parent
 PROJECTS = Path(os.environ.get("BAZE_LAB_PROJECTS_DIR", str(ROOT / "projects"))).resolve()
 ASSETS = ROOT / "web"
 ORDER = ("gpt", "claude", "gemini", "grok")
-ACCOUNTS = ("user", "friend")
+ACCOUNTS = ("user", "friend", "member3", "member4")
+ACCOUNT_LABELS = {"user": "연구자", "friend": "친구", "member3": "참여자 3", "member4": "참여자 4"}
+CLOUD_USERS = {"user": "owner", "friend": "friend", "member3": "member3", "member4": "member4"}
+CLOUD_PASSWORD_KEYS = {"user": "BAZE_LAB_OWNER_PASSWORD", "friend": "BAZE_LAB_FRIEND_PASSWORD",
+                       "member3": "BAZE_LAB_MEMBER3_PASSWORD", "member4": "BAZE_LAB_MEMBER4_PASSWORD"}
 MAX_UPLOAD = 2_000_000
 TEXT_EXTENSIONS = {".csv", ".tsv", ".txt", ".md", ".json", ".jsonl"}
 TOPIC_RX = re.compile(r"^[#* \-]*RESEARCH_TOPIC\s*[:：*]+\s*(.+)$", re.I | re.M)
@@ -47,7 +51,7 @@ def safe_name(value: str) -> str:
 
 
 def atomic_json(path: Path, data: dict) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
 
@@ -185,15 +189,15 @@ class Lab:
             if self.status in ("running", "paused", "stopping"):
                 raise ValueError("이미 연구가 진행 중입니다.")
             if not all(actor in self.clients for actor in ACCOUNTS):
-                raise ValueError("두 사람이 각자 BAZE 키를 연결해야 합니다.")
+                raise ValueError("네 사람이 각자 BAZE 키를 연결해야 합니다.")
             if not isinstance(rounds, int) or not 1 <= rounds <= 3:
                 raise ValueError("연구 라운드는 1~3회로 설정하세요.")
             chosen = {}
             if not isinstance(models, dict) or not isinstance(assignments, dict):
                 raise ValueError("모델과 담당 계정 설정을 확인하세요.")
             account_values = [assignments.get(provider) for provider in ORDER]
-            if any(actor not in ACCOUNTS for actor in account_values) or sorted(account_values) != ["friend", "friend", "user", "user"]:
-                raise ValueError("각 사람이 정확히 두 모델을 맡아야 합니다.")
+            if any(actor not in ACCOUNTS for actor in account_values) or len(set(account_values)) != len(ACCOUNTS):
+                raise ValueError("네 사람이 각각 정확히 한 모델을 맡아야 합니다.")
             for provider in ORDER:
                 model = str(models.get(provider, "")).strip()
                 account = assignments[provider]
@@ -218,7 +222,7 @@ class Lab:
             with (self.project / "data" / "processed" / "turn_metrics.csv").open("w", newline="", encoding="utf-8-sig") as fh:
                 csv.writer(fh).writerow(["turn", "phase", "round", "provider", "account", "model", "latency_seconds", "usage_json", "warning"])
             self.status, self.phase = "running", "role_selection"
-            self._append("system", "두 사람이 각각 두 모델의 호출을 맡습니다. 네 모델이 연구 역할을 논의해 정한 뒤 AI R&E 주제를 선정합니다.")
+            self._append("system", "네 사람이 각각 한 모델의 호출을 맡습니다. 네 모델이 연구 역할을 논의해 정한 뒤 AI R&E 주제를 선정합니다.")
             self._write_manifest()
             self.worker = threading.Thread(target=self._run, daemon=True)
             self.worker.start()
@@ -228,7 +232,7 @@ class Lab:
         content = content.strip()
         if not content or len(content) > 4000:
             raise ValueError("메시지를 1~4000자로 입력하세요.")
-        if actor not in ("user", "friend"):
+        if actor not in ACCOUNTS:
             raise ValueError("알 수 없는 참여자입니다.")
         with self.lock:
             if self.status not in ("running", "paused"):
@@ -475,7 +479,7 @@ class Lab:
         for msg in self.messages:
             if msg["actor"] == "system":
                 continue
-            label = msg["provider"].upper() if msg["provider"] else ("친구" if msg["actor"] == "friend" else "사용자")
+            label = msg["provider"].upper() if msg["provider"] else ACCOUNT_LABELS.get(msg["actor"], msg["actor"])
             lines.extend([f"## {label} · {msg['phase']} · {msg['at']}", "", msg["content"], ""])
         (self.project / "results" / "discussion_draft.md").write_text("\n".join(lines), encoding="utf-8")
         self._write_manifest()
@@ -630,6 +634,7 @@ class Handler(BaseHTTPRequestHandler):
 class ViewerHandler(Handler):
     """Password-protected peer entry to the same lab and full controls."""
     password: str
+    actor_id: str = "friend"
 
     def _authorized(self) -> bool:
         expected = "Basic " + base64.b64encode(f"viewer:{self.password}".encode()).decode("ascii")
@@ -655,10 +660,10 @@ class ViewerHandler(Handler):
         return bool(host) and origin == expected_origin
 
     def _state(self) -> dict:
-        return {**self.lab.public_state(), "self_actor": "friend"}
+        return {**self.lab.public_state(), "self_actor": self.actor_id}
 
     def _actor(self) -> str:
-        return "friend"
+        return self.actor_id
 
     def do_GET(self) -> None:
         if not self._require_auth():
@@ -671,15 +676,14 @@ class ViewerHandler(Handler):
 
 
 class CloudHandler(Handler):
-    """Two password-protected participants behind an HTTPS hosting proxy."""
+    """Four password-protected participants behind an HTTPS hosting proxy."""
     public_host: str
-    owner_password: str
-    friend_password: str
+    passwords: dict[str, str]
 
     def _actor(self) -> str:
         authorization = self.headers.get("Authorization", "")
-        for actor, name, password in (("user", "owner", self.owner_password),
-                                      ("friend", "friend", self.friend_password)):
+        for actor, name in CLOUD_USERS.items():
+            password = self.passwords[actor]
             expected = "Basic " + base64.b64encode(f"{name}:{password}".encode()).decode("ascii")
             if hmac.compare_digest(authorization, expected):
                 return actor
@@ -722,23 +726,21 @@ def main() -> None:
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--share", "--share-viewer", dest="share", action="store_true", help="친구와 같은 권한의 암호 보호 화면을 엽니다")
     parser.add_argument("--viewer-port", type=int, default=8766)
-    parser.add_argument("--cloud", action="store_true", help="HTTPS 프록시 뒤의 두 사용자 서버를 엽니다")
+    parser.add_argument("--cloud", action="store_true", help="HTTPS 프록시 뒤의 네 사용자 서버를 엽니다")
     args = parser.parse_args()
     if args.cloud:
         if args.share:
             parser.error("--cloud와 --share는 함께 사용할 수 없습니다.")
         host = (os.environ.get("BAZE_LAB_PUBLIC_HOST") or
                 os.environ.get("RENDER_EXTERNAL_HOSTNAME", "")).strip().lower()
-        owner_password = os.environ.get("BAZE_LAB_OWNER_PASSWORD", "")
-        friend_password = os.environ.get("BAZE_LAB_FRIEND_PASSWORD", "")
+        passwords = {actor: os.environ.get(key, "") for actor, key in CLOUD_PASSWORD_KEYS.items()}
         if not host or "/" in host or ":" in host or any(ch.isspace() for ch in host):
             parser.error("BAZE_LAB_PUBLIC_HOST에 HTTPS 주소의 도메인만 설정하세요.")
-        if len(owner_password) < 20 or len(friend_password) < 20 or owner_password == friend_password:
-            parser.error("서로 다른 20자 이상의 BAZE_LAB_OWNER_PASSWORD와 BAZE_LAB_FRIEND_PASSWORD를 설정하세요.")
+        if any(len(password) < 20 for password in passwords.values()) or len(set(passwords.values())) != len(ACCOUNTS):
+            parser.error("서로 다른 20자 이상의 BAZE_LAB_OWNER_PASSWORD, BAZE_LAB_FRIEND_PASSWORD, BAZE_LAB_MEMBER3_PASSWORD, BAZE_LAB_MEMBER4_PASSWORD를 설정하세요.")
         CloudHandler.lab = Lab()
         CloudHandler.public_host = host
-        CloudHandler.owner_password = owner_password
-        CloudHandler.friend_password = friend_password
+        CloudHandler.passwords = passwords
         port = int(os.environ.get("PORT", str(args.port)))
         server = ThreadingHTTPServer(("0.0.0.0", port), CloudHandler)
         print(f"AI R&E cloud server listening on port {port}", flush=True)
@@ -751,23 +753,24 @@ def main() -> None:
         return
     Handler.lab = Lab()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    viewer_server = None
+    viewer_servers = []
     if args.share:
-        ViewerHandler.lab = Handler.lab
-        ViewerHandler.password = os.environ.get("BAZE_LAB_SHARE_PASSWORD") or secrets.token_urlsafe(18)
-        if len(ViewerHandler.password) < 20:
-            parser.error("공유 암호는 최소 20자여야 합니다.")
-        viewer_server = ThreadingHTTPServer(("127.0.0.1", args.viewer_port), ViewerHandler)
-        threading.Thread(target=viewer_server.serve_forever, daemon=True).start()
+        for offset, actor in enumerate(ACCOUNTS[1:]):
+            key = "BAZE_LAB_SHARE_PASSWORD" if actor == "friend" else f"BAZE_LAB_{actor.upper()}_SHARE_PASSWORD"
+            password = os.environ.get(key) or secrets.token_urlsafe(18)
+            if len(password) < 20:
+                parser.error(f"{key}는 최소 20자여야 합니다.")
+            peer_handler = type(f"{actor.title()}Handler", (ViewerHandler,),
+                                {"lab": Handler.lab, "actor_id": actor, "password": password})
+            viewer_server = ThreadingHTTPServer(("127.0.0.1", args.viewer_port + offset), peer_handler)
+            viewer_servers.append((actor, viewer_server, password, bool(os.environ.get(key))))
+            threading.Thread(target=viewer_server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}"
     print(f"AI R&E 채팅: {url}", flush=True)
     print("종료: Ctrl+C", flush=True)
-    if viewer_server:
-        print(f"친구 공동 작업 화면: http://127.0.0.1:{viewer_server.server_port}", flush=True)
-        if os.environ.get("BAZE_LAB_SHARE_PASSWORD"):
-            print("친구 로그인: viewer / (실행할 때 설정한 암호)", flush=True)
-        else:
-            print(f"친구 로그인: viewer / {ViewerHandler.password}", flush=True)
+    for actor, viewer_server, password, provided in viewer_servers:
+        print(f"{ACCOUNT_LABELS[actor]} 공동 작업 화면: http://127.0.0.1:{viewer_server.server_port}", flush=True)
+        print(f"{ACCOUNT_LABELS[actor]} 로그인: viewer / " + ("(실행할 때 설정한 암호)" if provided else password), flush=True)
     if not args.no_browser:
         import webbrowser
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -777,7 +780,7 @@ def main() -> None:
         pass
     finally:
         server.server_close()
-        if viewer_server:
+        for _, viewer_server, _, _ in viewer_servers:
             viewer_server.shutdown()
             viewer_server.server_close()
 

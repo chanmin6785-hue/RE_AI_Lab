@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const PROVIDERS = ["gpt", "claude", "gemini", "grok"];
-const LABELS = {gpt:"GPT",claude:"Claude",gemini:"Gemini",grok:"Grok",user:"연구자",friend:"친구"};
+const ACCOUNTS = ["user", "friend", "member3", "member4"];
+const LABELS = {gpt:"GPT",claude:"Claude",gemini:"Gemini",grok:"Grok",user:"연구자",friend:"친구",member3:"참여자 3",member4:"참여자 4"};
 let lastMessageId = "";
 let lastAccountSignature = "";
 let lastRoleSignature = "";
@@ -66,8 +67,8 @@ function availableFor(state, account, provider) {
 
 function assignmentValid(state, assignment) {
   if (!state.connected) return false;
-  if (PROVIDERS.filter((provider) => assignment[provider] === "user").length !== 2) return false;
-  if (PROVIDERS.filter((provider) => assignment[provider] === "friend").length !== 2) return false;
+  if (new Set(PROVIDERS.map((provider) => assignment[provider])).size !== ACCOUNTS.length) return false;
+  if (!ACCOUNTS.every((actor) => PROVIDERS.some((provider) => assignment[provider] === actor))) return false;
   return PROVIDERS.every((provider) => availableFor(state, assignment[provider], provider).length > 0);
 }
 
@@ -78,12 +79,19 @@ function currentAssignment() {
 function chooseAssignment(state) {
   const current = currentAssignment();
   if (assignmentValid(state, current)) return current;
-  for (let i = 0; i < PROVIDERS.length; i++) {
-    for (let j = i + 1; j < PROVIDERS.length; j++) {
-      const candidate = Object.fromEntries(PROVIDERS.map((provider, index) => [provider, index === i || index === j ? "user" : "friend"]));
-      if (assignmentValid(state, candidate)) return candidate;
+  function find(index, remaining, candidate) {
+    if (index === PROVIDERS.length) return assignmentValid(state, candidate) ? {...candidate} : null;
+    const provider = PROVIDERS[index];
+    for (const actor of remaining) {
+      if (!availableFor(state, actor, provider).length) continue;
+      candidate[provider] = actor;
+      const found = find(index + 1, remaining.filter((item) => item !== actor), candidate);
+      if (found) return found;
     }
+    return null;
   }
+  const found = find(0, ACCOUNTS, {});
+  if (found) return found;
   return current;
 }
 
@@ -233,13 +241,13 @@ function render(state) {
   const names = {idle:"대기 중",running:"진행 중",paused:"일시정지",stopping:"중지 중",stopped:"중지됨",completed:"완료",failed:"오류"};
   $("statusBadge").textContent = names[state.status] || state.status;
   $("statusBadge").className = "status-badge " + state.status;
-  const connectedCount = ["user","friend"].filter((actor) => accounts[actor]?.connected).length;
-  $("connectionStatus").textContent = `● BAZE ${connectedCount}/2 연결`;
+  const connectedCount = ACCOUNTS.filter((actor) => accounts[actor]?.connected).length;
+  $("connectionStatus").textContent = `● BAZE ${connectedCount}/${ACCOUNTS.length} 연결`;
   $("connectionStatus").className = "connection-status" + (connected ? " ok" : "");
-  $("userConnection").textContent = "연구자 · " + (accounts.user?.connected ? "연결됨" : "연결 전");
-  $("friendConnection").textContent = "친구 · " + (accounts.friend?.connected ? "연결됨" : "연결 전");
-  $("userConnection").classList.toggle("ready", !!accounts.user?.connected);
-  $("friendConnection").classList.toggle("ready", !!accounts.friend?.connected);
+  for (const actor of ACCOUNTS) {
+    $(actor + "Connection").textContent = LABELS[actor] + " · " + (accounts[actor]?.connected ? "연결됨" : "연결 전");
+    $(actor + "Connection").classList.toggle("ready", !!accounts[actor]?.connected);
+  }
   $("keyHelp").textContent = `이 화면에서 연결한 키는 ${LABELS[selfActor]} 계정에만 등록됩니다. 키는 서버 메모리에 보관되며 상대에게 표시되지 않습니다.`;
   $("connectBtn").disabled = active || state.status === "stopping" || requestBusy;
   $("disconnectBtn").disabled = !accounts[selfActor]?.connected || active || state.status === "stopping" || requestBusy;
@@ -249,10 +257,10 @@ function render(state) {
   $("phaseText").textContent = phaseName(state.phase, state.round) || "준비";
   $("turnText").textContent = `${state.messages.filter((m) => m.actor === "model").length} / ${state.rounds ? 8 + state.rounds * 4 : 0} 발언`;
   const assignment = currentAssignment();
-  const countValid = PROVIDERS.filter((provider) => assignment[provider] === "user").length === 2;
+  const countValid = new Set(PROVIDERS.map((provider) => assignment[provider])).size === ACCOUNTS.length;
   const providerValid = assignmentValid(state, assignment);
   const modelsValid = PROVIDERS.every((provider) => !!$("model-" + provider).value);
-  $("assignmentStatus").textContent = !connected ? "두 사람이 각자 키를 연결해야 합니다." : !countValid ? "각 사람이 정확히 두 모델을 맡아야 합니다." : !providerValid ? "선택한 계정에서 사용할 수 없는 모델이 있습니다." : "연구자 2개 · 친구 2개 모델 배정 완료";
+  $("assignmentStatus").textContent = !connected ? "네 사람이 각자 키를 연결해야 합니다." : !countValid ? "각 사람이 정확히 한 모델을 맡아야 합니다." : !providerValid ? "선택한 계정에서 사용할 수 없는 모델이 있습니다." : "네 사람에게 모델 하나씩 배정 완료";
   $("assignmentStatus").className = "assignment-status " + (providerValid && modelsValid ? "valid" : "invalid");
   $("startBtn").disabled = !connected || active || state.status === "stopping" || !providerValid || !modelsValid;
   $("pauseBtn").disabled = state.status !== "running";
@@ -279,7 +287,7 @@ function render(state) {
     if (!messages.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.innerHTML = '<span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 두 사람이 BAZE 키를 연결하면 네 모델이 역할과 주제를 정하고 차례로 토론합니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button>';
+      empty.innerHTML = '<span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 네 사람이 BAZE 키를 연결하면 네 모델이 역할과 주제를 정하고 차례로 토론합니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button>';
       empty.querySelector("[data-open]").addEventListener("click", () => openTab("settings"));
       timeline.append(empty);
     }

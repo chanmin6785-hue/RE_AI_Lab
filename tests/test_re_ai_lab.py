@@ -33,8 +33,8 @@ class FakeClient:
         self.control = control
 
     def list_models(self):
-        providers = ("gpt", "claude") if self.api_key.startswith("OWNER") else ("gemini", "grok")
-        return [f"{provider}-test" for provider in providers]
+        provider = {"OWNER": "gpt", "FRIEND": "claude", "MEMBER3": "gemini", "MEMBER4": "grok"}[self.api_key.split("_", 1)[0]]
+        return [f"{provider}-test"]
 
     def ask(self, provider, prompt, model, max_tokens):
         calls = self.control.calls
@@ -65,9 +65,11 @@ class LabTest(unittest.TestCase):
         self.control = FakeControl()
         self.lab = Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp)
         self.models = {provider: f"{provider}-test" for provider in ("gpt", "claude", "gemini", "grok")}
-        self.assignments = {"gpt": "user", "claude": "user", "gemini": "friend", "grok": "friend"}
+        self.assignments = {"gpt": "user", "claude": "friend", "gemini": "member3", "grok": "member4"}
         self.lab.connect("OWNER_SECRET_TEST_KEY", actor="user")
         self.lab.connect("FRIEND_SECRET_TEST_KEY", actor="friend")
+        self.lab.connect("MEMBER3_SECRET_TEST_KEY", actor="member3")
+        self.lab.connect("MEMBER4_SECRET_TEST_KEY", actor="member4")
 
     def tearDown(self):
         self.control.release.set()
@@ -80,7 +82,7 @@ class LabTest(unittest.TestCase):
         self.lab.worker.join(5)
         self.assertFalse(self.lab.worker.is_alive())
 
-    def test_roles_two_keys_topic_activity_and_persistence(self):
+    def test_roles_four_keys_topic_activity_and_persistence(self):
         self.lab.start(1, self.models, self.assignments)
         self.assertTrue(self.control.entered.wait(2))
         self.lab.intervene("초등학생도 따라 할 수 있는 평가 방법을 포함하세요.")
@@ -98,9 +100,10 @@ class LabTest(unittest.TestCase):
         self.assertEqual(len(state["roles"]), 4)
         self.assertEqual(len(state["activities"]), 12)
         self.assertEqual([item["status"] for item in state["activities"]], ["completed"] * 12)
-        self.assertEqual({key for key, _, _, _ in self.control.calls}, {"OWNER_SECRET_TEST_KEY", "FRIEND_SECRET_TEST_KEY"})
-        self.assertTrue(all((key.startswith("OWNER") and provider in ("gpt", "claude")) or
-                            (key.startswith("FRIEND") and provider in ("gemini", "grok"))
+        self.assertEqual({key for key, _, _, _ in self.control.calls},
+                         {"OWNER_SECRET_TEST_KEY", "FRIEND_SECRET_TEST_KEY", "MEMBER3_SECRET_TEST_KEY", "MEMBER4_SECRET_TEST_KEY"})
+        self.assertTrue(all(self.assignments[provider] == {"OWNER": "user", "FRIEND": "friend",
+                                                             "MEMBER3": "member3", "MEMBER4": "member4"}[key.split("_", 1)[0]]
                             for key, provider, _, _ in self.control.calls))
         self.assertIn("초등학생도", self.control.calls[1][2])
         self.assertIn("case,value", self.control.calls[1][2])
@@ -116,15 +119,17 @@ class LabTest(unittest.TestCase):
         texts = "\n".join(p.read_text(encoding="utf-8-sig") for p in self.lab.project.rglob("*")
                           if p.is_file() and p.suffix in (".md", ".txt", ".json", ".jsonl", ".csv"))
         self.assertNotIn("OWNER_SECRET_TEST_KEY", texts)
-        self.assertNotIn("FRIEND_SECRET_TEST_KEY", texts)
+        for key in ("FRIEND_SECRET_TEST_KEY", "MEMBER3_SECRET_TEST_KEY", "MEMBER4_SECRET_TEST_KEY"):
+            self.assertNotIn(key, texts)
         self.assertNotIn("OWNER_SECRET_TEST_KEY", json.dumps(state))
-        self.assertNotIn("FRIEND_SECRET_TEST_KEY", json.dumps(state))
+        for key in ("FRIEND_SECRET_TEST_KEY", "MEMBER3_SECRET_TEST_KEY", "MEMBER4_SECRET_TEST_KEY"):
+            self.assertNotIn(key, json.dumps(state))
 
-    def test_exact_two_model_assignments_are_required(self):
+    def test_exact_one_model_per_person_is_required(self):
         invalid = dict(self.assignments, gemini="user")
-        with self.assertRaisesRegex(ValueError, "정확히 두 모델"):
+        with self.assertRaisesRegex(ValueError, "정확히 한 모델"):
             self.lab.start(1, self.models, invalid)
-        invalid = {"gpt": "friend", "claude": "user", "gemini": "user", "grok": "friend"}
+        invalid = dict(self.assignments, gpt="friend", claude="user")
         with self.assertRaisesRegex(ValueError, "담당 계정"):
             self.lab.start(1, self.models, invalid)
         self.assertIsNone(self.lab.project)
@@ -141,6 +146,8 @@ class LabTest(unittest.TestCase):
         self.assertIn("[API_KEY]", state["error"])
         self.assertNotIn("OWNER_SECRET_TEST_KEY", json.dumps(state))
         self.assertNotIn("FRIEND_SECRET_TEST_KEY", json.dumps(state))
+        self.assertNotIn("MEMBER3_SECRET_TEST_KEY", json.dumps(state))
+        self.assertNotIn("MEMBER4_SECRET_TEST_KEY", json.dumps(state))
         detail = self.lab.turn_detail(1)
         self.assertEqual(detail["status"], "failed")
         self.assertNotIn("SECRET_TEST_KEY", json.dumps(detail))
@@ -269,8 +276,12 @@ class LabTest(unittest.TestCase):
     def test_cloud_roles_auth_host_and_origin(self):
         CloudHandler.lab = self.lab
         CloudHandler.public_host = "lab.example.test"
-        CloudHandler.owner_password = "owner-password-at-least-20-characters"
-        CloudHandler.friend_password = "friend-password-at-least-20-characters"
+        CloudHandler.passwords = {
+            "user": "owner-password-at-least-20-characters",
+            "friend": "friend-password-at-least-20-characters",
+            "member3": "member3-password-at-least-20-characters",
+            "member4": "member4-password-at-least-20-characters",
+        }
         server = ThreadingHTTPServer(("127.0.0.1", 0), CloudHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -289,29 +300,44 @@ class LabTest(unittest.TestCase):
             with self.assertRaises(HTTPError) as unauth:
                 urlopen(Request(root + "/api/state", headers={"Host": "lab.example.test"}))
             self.assertEqual(unauth.exception.code, 401)
-            for actor, name, password in (("user", "owner", CloudHandler.owner_password),
-                                          ("friend", "friend", CloudHandler.friend_password)):
+            for actor, name, password in (("user", "owner", CloudHandler.passwords["user"]),
+                                          ("friend", "friend", CloudHandler.passwords["friend"]),
+                                          ("member3", "member3", CloudHandler.passwords["member3"]),
+                                          ("member4", "member4", CloudHandler.passwords["member4"])):
                 with urlopen(Request(root + "/api/state", headers=headers(name, password))) as response:
                     state = json.load(response)
                 self.assertEqual(state["self_actor"], actor)
                 self.assertNotIn("OWNER_SECRET_TEST_KEY", json.dumps(state))
                 self.assertNotIn("FRIEND_SECRET_TEST_KEY", json.dumps(state))
+                self.assertNotIn("MEMBER3_SECRET_TEST_KEY", json.dumps(state))
+                self.assertNotIn("MEMBER4_SECRET_TEST_KEY", json.dumps(state))
             with self.assertRaises(HTTPError) as wrong_host:
-                urlopen(Request(root + "/api/state", headers=headers("owner", CloudHandler.owner_password, host="evil.test")))
+                urlopen(Request(root + "/api/state", headers=headers("owner", CloudHandler.passwords["user"], host="evil.test")))
             self.assertEqual(wrong_host.exception.code, 403)
             with self.assertRaises(HTTPError) as wrong_origin:
                 request = Request(root + "/api/disconnect", data=b"{}", method="POST",
-                                  headers={**headers("friend", CloudHandler.friend_password, "https://evil.test"),
+                                  headers={**headers("friend", CloudHandler.passwords["friend"], "https://evil.test"),
                                            "Content-Type": "application/json"})
                 urlopen(request)
             self.assertEqual(wrong_origin.exception.code, 403)
             request = Request(root + "/api/disconnect", data=b"{}", method="POST",
-                              headers={**headers("friend", CloudHandler.friend_password, "https://lab.example.test"),
+                              headers={**headers("friend", CloudHandler.passwords["friend"], "https://lab.example.test"),
                                        "Content-Type": "application/json"})
             with urlopen(request) as response:
                 state = json.load(response)
             self.assertTrue(state["accounts"]["user"]["connected"])
             self.assertFalse(state["accounts"]["friend"]["connected"])
+            self.assertTrue(state["accounts"]["member3"]["connected"])
+            self.assertTrue(state["accounts"]["member4"]["connected"])
+            for actor in ("member3", "member4"):
+                name = actor
+                request = Request(root + "/api/connect", data=json.dumps({"key": actor.upper() + "_REPLACED_KEY"}).encode(), method="POST",
+                                  headers={**headers(name, CloudHandler.passwords[actor], "https://lab.example.test"),
+                                           "Content-Type": "application/json"})
+                with urlopen(request) as response:
+                    connected = json.load(response)
+                self.assertEqual(connected["actor"], actor)
+                self.assertEqual(self.lab.clients[actor].api_key, actor.upper() + "_REPLACED_KEY")
         finally:
             server.shutdown()
             server.server_close()

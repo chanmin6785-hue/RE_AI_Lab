@@ -11,6 +11,10 @@ services:
         sync: false
       - key: BAZE_LAB_FRIEND_PASSWORD
         sync: false
+      - key: BAZE_LAB_MEMBER3_PASSWORD
+        sync: false
+      - key: BAZE_LAB_MEMBER4_PASSWORD
+        sync: false
 
 
 
