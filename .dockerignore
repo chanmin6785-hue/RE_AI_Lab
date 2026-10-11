@@ -1,0 +1,15 @@
+projects/
+tools/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+*.key
+*.pem
+*.log
+*.sqlite
+*.sqlite3
+.git/
+
