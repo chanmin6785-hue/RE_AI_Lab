@@ -85,9 +85,12 @@ GitHub에 코드를 올릴 수는 있지만, [GitHub Pages는 Python 서버를 �
 
 ## PC를 꺼도 접속하는 클라우드 배포
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/chanmin6785-hue/RE_AI_Lab)
+
 `Dockerfile`은 HTTPS 프록시 뒤에서 두 사람이 각각 로그인하는 서버를 실행합니다. 호스팅 서비스가 제공하는 HTTPS 도메인을 `BAZE_LAB_PUBLIC_HOST`에 **주소 앞의 `https://` 없이** 설정하고, `BAZE_LAB_OWNER_PASSWORD`와 `BAZE_LAB_FRIEND_PASSWORD`에 서로 다른 20자 이상의 암호를 각각 등록하세요. 암호를 코드나 GitHub 저장소에 적지 마세요. 두 사람은 같은 URL에서 각각 `owner` / `friend` 계정으로 로그인하며 두 계정은 연구 설정·대화·자료·시작/중지에 같은 권한을 가집니다. BAZE 키는 각자 로그인한 화면에서 연결합니다.
 
 연구 파일을 재배포·재시작 뒤에도 보존하려면 호스트의 **영구 저장 디스크**를 붙이고 `BAZE_LAB_PROJECTS_DIR`을 해당 디스크의 `projects` 폴더로 지정해야 합니다. 예를 들어 디스크가 `/data`에 붙었다면 `/data/projects`입니다. 디스크 없이 실행하면 호스트가 재시작할 때 자료가 사라질 수 있습니다. 앱은 BAZE 키를 메모리에만 보관하므로 서버가 재시작하면 두 사람이 키를 다시 연결해야 합니다. 진행 중이던 모델 호출도 재시작 시 이어지지 않습니다.
 
 Render에서 GitHub 저장소의 **New → Blueprint**를 선택해 이 저장소의 `render.yaml`을 연결하면 무료 Web Service를 만들 수 있습니다. Render가 자동 제공하는 `RENDER_EXTERNAL_HOSTNAME`을 사용하므로 `BAZE_LAB_PUBLIC_HOST`를 따로 지정할 필요는 없습니다. 배포 화면에서 두 로그인 암호를 각각 입력하세요. 상태 확인 경로는 `/healthz`입니다. 무료 인스턴스는 유휴 시 중지되고 로컬 파일이 재시작·재배포 후 유지되지 않습니다. 연구가 끝나면 반드시 **전체 ZIP 받기**로 기록을 내려받으세요. 서버가 다시 켜지면 두 사람이 BAZE 키를 다시 연결해야 합니다. GitHub 저장소를 공개하더라도 API 키·로그인 암호·연구 자료는 저장소에 올리지 마세요.
+
 
