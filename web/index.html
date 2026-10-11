@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI R&E Lab · 공동 연구 채팅</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="room-identity"><div class="room-mark">✦</div><div><strong>AI R&E Lab</strong><span>GPT · Claude · Gemini · Grok과 함께하는 연구실</span></div></div>
+      <nav class="tabs" aria-label="연구실 화면">
+        <button class="tab active" data-tab="chat" aria-current="page">메시지</button>
+        <button class="tab" data-tab="activity">활동 기록</button>
+        <button class="tab" data-tab="files">공유 자료</button>
+        <button class="tab" data-tab="settings">연구 설정</button>
+      </nav>
+      <div class="header-status"><span id="connectionStatus" class="connection-status">BAZE 연결 전</span><span id="statusBadge" class="status-badge">대기 중</span></div>
+    </header>
+
+    <main id="chatPanel" class="chat-panel" aria-label="연구 대화">
+      <div class="conversation">
+        <div class="topic-strip"><span class="pin">✦ 연구 주제</span><strong id="topicTitle">모델들이 역할과 연구 주제를 선정합니다</strong><p id="questionText">연구를 시작하면 네 모델이 먼저 역할을 정한 뒤 AI 분야의 주제를 함께 선정합니다.</p></div>
+        <div class="progress-strip"><div><span class="activity-dot"></span><strong id="phaseText">준비</strong><span id="turnText">0 / 0 발언</span></div><div class="quick-actions"><button id="pauseBtn" disabled>일시정지</button><button id="resumeBtn" disabled>계속</button><button id="stopBtn" disabled>중지</button></div></div>
+        <section id="timeline" class="timeline" aria-live="polite"><div class="empty-state"><span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 BAZE에 연결하면 네 모델이 주제를 정하고 차례로 토론합니다. 이곳에서 대화를 지켜보며 직접 의견을 보낼 수 있습니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button></div></section>
+        <div class="composer-area"><form id="messageForm" class="composer"><textarea id="messageInput" rows="1" placeholder="메시지를 입력하세요…" disabled></textarea><button id="sendBtn" type="submit" aria-label="메시지 보내기" disabled>➤</button></form><div class="composer-help">Enter로 보내기 · Shift+Enter로 줄바꿈 · 다음 모델 발언부터 반영됩니다</div></div>
+      </div>
+    </main>
+
+    <main id="activityPanel" class="page-panel" hidden>
+      <div class="page-content"><div class="page-intro"><span class="eyebrow">LIVE ACTIVITY</span><h1>모델 활동 기록</h1><p>호출 계정·모델·상태·실제 프롬프트와 응답을 두 사람이 함께 확인합니다.</p></div>
+        <section class="card activity-note"><h2>보이는 범위</h2><p>요청이 시작되면 기다리는 상태가 표시되고, 완료 후 응답과 사용량이 기록됩니다. 모델 제공업체가 공개하지 않는 내부 사고 과정은 볼 수 없습니다.</p></section>
+        <section class="card activity-card"><h2>네 모델이 정한 역할</h2><div id="roleList" class="role-list">연구 시작 후 네 모델이 역할을 협의합니다.</div></section>
+        <section class="card activity-card"><h2>API 호출</h2><div id="activityList" class="activity-list">아직 호출 기록이 없습니다.</div></section>
+        <section id="activityDetail" class="card activity-card activity-detail" hidden><h2 id="detailTitle">호출 내용</h2><h3>모델에 전달한 프롬프트</h3><pre id="detailPrompt"></pre><h3>받은 응답</h3><pre id="detailResponse"></pre><details><summary>원형 API 응답 보기</summary><pre id="detailRaw"></pre></details></section>
+      </div>
+    </main>
+
+    <main id="filesPanel" class="page-panel" hidden>
+      <div class="page-content"><div class="page-intro"><span class="eyebrow">SHARED FILES</span><h1>공유 자료</h1><p>두 사람이 올린 자료와 출처는 같은 연구 폴더에 저장됩니다.</p></div>
+        <div class="card-grid"><section class="card"><div class="card-icon">▤</div><h2>프로젝트 폴더</h2><p>연구 대화, 원본 응답, 결과 초안을 호스트 컴퓨터에 보관합니다.</p><p id="projectPath" class="path">연구 시작 후 생성됩니다.</p><div class="card-actions"><button id="copyPathBtn" class="secondary" disabled>경로 복사</button><button id="downloadBtn" class="secondary" disabled>전체 ZIP 받기</button></div></section>
+        <section class="card"><div class="card-icon">↑</div><h2>데이터셋 추가</h2><p>UTF-8 CSV · TSV · TXT · MD · JSON · JSONL, 최대 2MB</p><input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.md,.json,.jsonl" disabled><button id="uploadBtn" class="secondary" disabled>선택한 파일 올리기</button><ul id="datasetList" class="file-list"><li>아직 추가된 자료가 없습니다.</li></ul></section>
+        <section class="card"><div class="card-icon">↗</div><h2>출처 기록</h2><p>제목과 URL, 수집 방법을 남겨 연구 기록에 포함합니다.</p><input id="sourceTitle" placeholder="자료 제목" disabled><input id="sourceUrl" type="url" placeholder="https://..." disabled><textarea id="sourceNote" rows="3" placeholder="출처·수집 방법 메모" disabled></textarea><button id="sourceBtn" class="secondary" disabled>출처 추가</button></section></div>
+        <p class="page-note">자료 내용과 출처는 자동 검증되지 않습니다. 모델이 만든 내용은 실제 관찰 결과와 구분해 확인하세요.</p>
+      </div>
+    </main>
+
+    <main id="settingsPanel" class="page-panel" hidden>
+      <div class="page-content"><div class="page-intro"><span class="eyebrow">RESEARCH SETTINGS</span><h1>연구 설정</h1><p>두 참여자 모두 같은 연구를 설정하고 시작·중지할 수 있습니다. 실제 API 호출 비용이 발생합니다.</p></div>
+        <section class="card settings-card"><div class="card-icon">◇</div><h2>각자의 BAZE 키 연결</h2><p id="keyHelp">이 화면에서 입력한 키는 내 계정으로 연결됩니다. 키는 서버 메모리에만 보관되며 상대 화면에 표시되지 않습니다.</p><div class="key-row"><input id="apiKey" type="password" autocomplete="off" placeholder="내 BAZE API 키"><button id="connectBtn" class="secondary">내 키 연결</button></div><div class="account-status"><span id="userConnection">연구자 · 연결 전</span><span id="friendConnection">친구 · 연결 전</span></div><button id="disconnectBtn" class="disconnect-button" disabled>내 키 연결 해제</button></section>
+        <section class="card settings-card"><div class="card-icon">✦</div><h2>네 모델이 역할과 주제 선정</h2><p>네 모델이 먼저 연구 역할을 협의합니다. 이어서 역할에 따라 주제를 토론하고 선정합니다. 각 사람의 키에 모델 두 개씩 배정하세요.</p><label for="rounds">연구 토론 라운드</label><select id="rounds"><option value="1">1회 · 총 12번 호출</option><option value="2">2회 · 총 16번 호출</option><option value="3">3회 · 총 20번 호출</option></select><label class="check-row" for="stepMode"><input id="stepMode" type="checkbox"> 모델 발언마다 잠시 멈추기</label>
+          <div class="model-grid"><strong>모델</strong><strong>담당 계정</strong><strong>사용할 모델 ID</strong>
+            <label for="account-gpt">GPT</label><select id="account-gpt"><option value="user">연구자</option><option value="friend">친구</option></select><select id="model-gpt" disabled><option>연결 후 선택</option></select>
+            <label for="account-claude">Claude</label><select id="account-claude"><option value="user">연구자</option><option value="friend">친구</option></select><select id="model-claude" disabled><option>연결 후 선택</option></select>
+            <label for="account-gemini">Gemini</label><select id="account-gemini"><option value="user">연구자</option><option value="friend">친구</option></select><select id="model-gemini" disabled><option>연결 후 선택</option></select>
+            <label for="account-grok">Grok</label><select id="account-grok"><option value="user">연구자</option><option value="friend">친구</option></select><select id="model-grok" disabled><option>연결 후 선택</option></select></div>
+          <p id="assignmentStatus" class="assignment-status">각 사람이 두 모델을 맡아야 합니다.</p>
+          <button id="startBtn" class="primary" disabled>연구 시작하기 <span>↗</span></button></section>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
+
