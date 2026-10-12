@@ -436,10 +436,16 @@ class LabTest(unittest.TestCase):
             csrf = re.search(rb'name="csrf" value="([^"]+)"', page).group(1).decode()
             login_cookie = login_headers["Set-Cookie"].split(";", 1)[0]
             self.assertIn("Secure; HttpOnly; SameSite=Strict", login_headers["Set-Cookie"])
+            self.assertIn(b'<script src="/login.js" defer>', page)
+            self.assertEqual(request("GET", "/login.js")[0], 200)
             self.assertEqual(request("GET", "/api/state")[0], 401)
             self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":"wrong", "csrf":csrf}), cookie=login_cookie)[0], 303)
             self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":csrf}), origin="https://evil.test")[0], 403)
             self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":"tampered"}), cookie=login_cookie, origin=None)[0], 403)
+            header = {"X-RE-Lab-CSRF": csrf, "Sec-Fetch-Site": "same-origin"}
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":csrf}), origin="null", extra=header)[0], 303)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":csrf}), origin="null")[0], 403)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":csrf}), origin="https://evil.test", extra=header)[0], 403)
             for actor, label in CLOUD_USERS.items():
                 body = urlencode({"account":label, "password":CloudHandler.passwords[actor], "csrf":csrf})
                 status, headers, _ = request("POST", "/login", body, cookie=login_cookie, origin="null")

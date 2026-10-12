@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>로그인 · AI R&E Lab</title>
   <link rel="stylesheet" href="/login.css">
+  <script src="/login.js" defer></script>
 </head>
 <body>
   <main class="login-card">
@@ -13,7 +14,7 @@
     <h1>AI R&E Lab</h1>
     <p class="intro">네 사람이 함께 연구 대화를 보고 참여하는 공간입니다.</p>
     <!-- LOGIN_ERROR -->
-    <form method="post" action="/login">
+    <form id="loginForm" method="post" action="/login">
       <input type="hidden" name="csrf" value="<!-- LOGIN_CSRF -->">
       <label for="account">참여자</label>
       <select id="account" name="account" autocomplete="username" required>

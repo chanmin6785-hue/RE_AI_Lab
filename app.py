@@ -722,14 +722,21 @@ class CloudHandler(Handler):
 
     def _valid_login_token(self, token: str) -> bool:
         try:
-            cookie = SimpleCookie()
-            cookie.load(self.headers.get("Cookie", ""))
-            stored = cookie["re_lab_login_csrf"].value
             expiry, nonce, signature = token.split(".", 2)
-            if int(expiry) < time.time() or not hmac.compare_digest(token, stored):
+            if int(expiry) < time.time():
                 return False
             expected = base64.urlsafe_b64encode(hmac.new(self.session_key, f"login.{expiry}.{nonce}".encode(), hashlib.sha256).digest()).decode().rstrip("=")
-            return hmac.compare_digest(signature, expected)
+            if not hmac.compare_digest(signature, expected):
+                return False
+            origin = self.headers.get("Origin", "")
+            if origin not in ("", "null", f"https://{self.public_host}"):
+                return False
+            supplied = self.headers.get("X-RE-Lab-CSRF", "")
+            if supplied and hmac.compare_digest(token, supplied):
+                return True
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get("Cookie", ""))
+            return hmac.compare_digest(token, cookie["re_lab_login_csrf"].value)
         except (CookieError, KeyError, ValueError, UnicodeError):
             return False
 
@@ -819,6 +826,16 @@ class CloudHandler(Handler):
             data = (ASSETS / "login.css").read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path == "/login.js":
+            data = (ASSETS / "login.js").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(data)))
