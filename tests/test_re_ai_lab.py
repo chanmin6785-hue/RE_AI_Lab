@@ -16,6 +16,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import Lab, ViewerHandler, CloudHandler, ACCOUNT_LABELS, CLOUD_USERS
+from key_store import KeyStoreError
 from baze_models import Reply
 
 
@@ -135,6 +136,41 @@ class LabTest(unittest.TestCase):
             self.lab.start(1, self.models, invalid)
         self.assertIsNone(self.lab.project)
 
+    def test_saved_keys_restore_after_recreating_lab(self):
+        class MemoryStore:
+            rows = {}
+            def load_all(self):
+                return dict(self.rows)
+            def save(self, slot, key, models):
+                self.rows[slot] = (key, models)
+            def delete(self, slot):
+                self.rows.pop(slot, None)
+
+        store = MemoryStore()
+        new_lab = Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp, store)
+        for actor, key in (("user", "OWNER_SECRET_TEST_KEY"), ("friend", "FRIEND_SECRET_TEST_KEY"),
+                           ("member3", "MEMBER3_SECRET_TEST_KEY"), ("member4", "MEMBER4_SECRET_TEST_KEY")):
+            new_lab.connect(key, actor=actor)
+        self.assertEqual(new_lab.public_state()["key_storage"], "persistent")
+        restored = Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp, store)
+        self.assertTrue(restored.public_state()["connected"])
+        self.assertEqual(restored.clients["friend"].api_key, "FRIEND_SECRET_TEST_KEY")
+        restored.disconnect("friend")
+        self.assertNotIn("friend", store.rows)
+        self.assertFalse(Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp, store)
+                         .public_state()["connected"])
+
+    def test_storage_failure_keeps_previous_key(self):
+        class FailingStore:
+            def load_all(self): return {}
+            def save(self, slot, key, models): raise KeyStoreError("storage unavailable")
+            def delete(self, slot): raise KeyStoreError("storage unavailable")
+
+        lab = Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp, FailingStore())
+        with self.assertRaises(KeyStoreError):
+            lab.connect("FRIEND_SECRET_TEST_KEY", actor="friend")
+        self.assertFalse(lab.public_state()["accounts"]["friend"]["connected"])
+
     def test_failed_call_is_visible_without_exposing_either_key(self):
         self.control.fail_on_call = 1
         self.lab.start(1, self.models, self.assignments)
@@ -205,6 +241,8 @@ class LabTest(unittest.TestCase):
         for label in ACCOUNT_LABELS.values():
             self.assertIn(label, html)
             self.assertIn(label, script)
+        for slot in ACCOUNT_LABELS:
+            self.assertIn('id="apiKey-' + slot + '"', html)
         for old_label in ("연구자", "친구", "참여자 3", "참여자 4"):
             self.assertNotIn(old_label, html + script)
 
@@ -347,6 +385,13 @@ class LabTest(unittest.TestCase):
                     connected = json.load(response)
                 self.assertEqual(connected["actor"], actor)
                 self.assertEqual(self.lab.clients[actor].api_key, actor.upper() + "_REPLACED_KEY")
+            request = Request(root + "/api/connect",
+                              data=json.dumps({"slot":"user", "key":"OWNER_REPLACED_KEY"}).encode(), method="POST",
+                              headers={**headers("1314", CloudHandler.passwords["friend"], "https://lab.example.test"),
+                                       "Content-Type": "application/json"})
+            with urlopen(request) as response:
+                self.assertEqual(json.load(response)["actor"], "user")
+            self.assertEqual(self.lab.clients["user"].api_key, "OWNER_REPLACED_KEY")
         finally:
             server.shutdown()
             server.server_close()

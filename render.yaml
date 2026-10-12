@@ -15,6 +15,12 @@ services:
         sync: false
       - key: BAZE_LAB_MEMBER4_PASSWORD
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: BAZE_LAB_KEY_ENCRYPTION_KEY
+        sync: false
 
 
 

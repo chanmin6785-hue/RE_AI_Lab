@@ -21,6 +21,7 @@ from uuid import uuid4
 from zipfile import ZipFile, ZIP_DEFLATED
 
 from baze_models import BazeClient, BazeError, DEFAULT_MODELS
+from key_store import KeyStoreError, store_from_environment
 
 
 ROOT = Path(__file__).resolve().parent
@@ -57,14 +58,19 @@ def atomic_json(path: Path, data: dict) -> None:
 
 
 class Lab:
-    def __init__(self, client_factory=BazeClient, projects: Path = PROJECTS):
+    def __init__(self, client_factory=BazeClient, projects: Path = PROJECTS, key_store=None):
         self.client_factory = client_factory
         self.projects = projects
+        self.key_store = key_store
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.clients: dict[str, BazeClient] = {}
         self.available_by_account: dict[str, dict[str, list[str]]] = {}
         self.reset()
+        if self.key_store:
+            for actor, (key, models) in self.key_store.load_all().items():
+                self.clients[actor] = self.client_factory(key, timeout=150.0)
+                self.available_by_account[actor] = models
 
     def reset(self) -> None:
         self.status = "idle"
@@ -108,6 +114,8 @@ class Lab:
         with self.lock:
             if self.status in ("running", "paused", "stopping"):
                 raise ValueError("연구가 시작되어 키를 변경할 수 없습니다.")
+            if self.key_store:
+                self.key_store.save(actor, key, grouped)
             self.clients[actor] = client
             self.available_by_account[actor] = grouped
         return {"actor": actor, "available": grouped, "defaults": DEFAULT_MODELS}
@@ -118,6 +126,8 @@ class Lab:
         with self.lock:
             if self.status in ("running", "paused", "stopping"):
                 raise ValueError("진행 중인 연구를 먼저 완료하거나 중지하세요.")
+            if self.key_store:
+                self.key_store.delete(actor)
             self.clients.pop(actor, None)
             self.available_by_account.pop(actor, None)
             return self.public_state()
@@ -136,6 +146,7 @@ class Lab:
         with self.lock:
             return {
                 "connected": all(actor in self.clients for actor in ACCOUNTS),
+                "key_storage": "persistent" if self.key_store else "temporary",
                 "accounts": {
                     actor: {"connected": actor in self.clients,
                             "available": self.available_by_account.get(actor, {provider: [] for provider in ORDER})}
@@ -189,7 +200,7 @@ class Lab:
             if self.status in ("running", "paused", "stopping"):
                 raise ValueError("이미 연구가 진행 중입니다.")
             if not all(actor in self.clients for actor in ACCOUNTS):
-                raise ValueError("네 사람이 각자 BAZE 키를 연결해야 합니다.")
+                raise ValueError("네 칸에 BAZE 키를 연결해야 합니다.")
             if not isinstance(rounds, int) or not 1 <= rounds <= 3:
                 raise ValueError("연구 라운드는 1~3회로 설정하세요.")
             chosen = {}
@@ -222,7 +233,7 @@ class Lab:
             with (self.project / "data" / "processed" / "turn_metrics.csv").open("w", newline="", encoding="utf-8-sig") as fh:
                 csv.writer(fh).writerow(["turn", "phase", "round", "provider", "account", "model", "latency_seconds", "usage_json", "warning"])
             self.status, self.phase = "running", "role_selection"
-            self._append("system", "네 사람이 각각 한 모델의 호출을 맡습니다. 네 모델이 연구 역할을 논의해 정한 뒤 AI R&E 주제를 선정합니다.")
+            self._append("system", "네 칸의 키가 각각 한 모델의 호출을 맡습니다. 네 모델이 연구 역할을 논의해 정한 뒤 AI R&E 주제를 선정합니다.")
             self._write_manifest()
             self.worker = threading.Thread(target=self._run, daemon=True)
             self.worker.start()
@@ -603,9 +614,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("JSON 객체를 보내세요.")
             path = self.path
             if path == "/api/connect":
-                result = self.lab.connect(str(data.get("key", "")), actor=self._actor())
+                result = self.lab.connect(str(data.get("key", "")), actor=str(data.get("slot", self._actor())))
             elif path == "/api/disconnect":
-                result = self.lab.disconnect(actor=self._actor())
+                result = self.lab.disconnect(actor=str(data.get("slot", self._actor())))
             elif path == "/api/start":
                 result = self.lab.start(data.get("rounds"), data.get("models", {}),
                                         data.get("assignments", {}), data.get("step_mode", False))
@@ -625,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(404, {"error": "찾을 수 없습니다."}); return
             self._json(200, result)
-        except (ValueError, BazeError, TypeError, json.JSONDecodeError) as exc:
+        except (ValueError, BazeError, KeyStoreError, TypeError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)[:2000]})
         except Exception as exc:
             self._json(500, {"error": f"서버 오류: {type(exc).__name__}"})
@@ -738,7 +749,11 @@ def main() -> None:
             parser.error("BAZE_LAB_PUBLIC_HOST에 HTTPS 주소의 도메인만 설정하세요.")
         if any(len(password) < 20 for password in passwords.values()) or len(set(passwords.values())) != len(ACCOUNTS):
             parser.error("서로 다른 20자 이상의 BAZE_LAB_OWNER_PASSWORD, BAZE_LAB_FRIEND_PASSWORD, BAZE_LAB_MEMBER3_PASSWORD, BAZE_LAB_MEMBER4_PASSWORD를 설정하세요.")
-        CloudHandler.lab = Lab()
+        try:
+            key_store = store_from_environment()
+            CloudHandler.lab = Lab(key_store=key_store)
+        except KeyStoreError as exc:
+            parser.error(str(exc))
         CloudHandler.public_host = host
         CloudHandler.passwords = passwords
         port = int(os.environ.get("PORT", str(args.port)))

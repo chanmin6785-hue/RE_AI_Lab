@@ -245,13 +245,15 @@ function render(state) {
   $("connectionStatus").textContent = `● BAZE ${connectedCount}/${ACCOUNTS.length} 연결`;
   $("connectionStatus").className = "connection-status" + (connected ? " ok" : "");
   for (const actor of ACCOUNTS) {
-    $(actor + "Connection").textContent = LABELS[actor] + " · " + (accounts[actor]?.connected ? "연결됨" : "연결 전");
+    $(actor + "Connection").textContent = accounts[actor]?.connected ?
+      (state.key_storage === "persistent" ? "영구 저장됨 · 키 값은 표시되지 않습니다" : "임시 연결됨 · 서버 재시작 시 사라집니다") : "연결 전";
     $(actor + "Connection").classList.toggle("ready", !!accounts[actor]?.connected);
+    $("apiKey-" + actor).disabled = active || state.status === "stopping" || requestBusy;
   }
-  $("keyHelp").textContent = `이 화면에서 연결한 키는 ${LABELS[selfActor]} 계정에만 등록됩니다. 키는 서버 메모리에 보관되며 상대에게 표시되지 않습니다.`;
-  $("connectBtn").disabled = active || state.status === "stopping" || requestBusy;
-  $("disconnectBtn").disabled = !accounts[selfActor]?.connected || active || state.status === "stopping" || requestBusy;
-  $("apiKey").disabled = active || state.status === "stopping";
+  document.querySelectorAll(".connect-key").forEach((button) => button.disabled = active || state.status === "stopping" || requestBusy);
+  document.querySelectorAll(".disconnect-key").forEach((button) => button.disabled = !accounts[button.dataset.slot]?.connected || active || state.status === "stopping" || requestBusy);
+  $("keyStorageStatus").textContent = state.key_storage === "persistent" ? "암호화해 외부 저장소에 보관 중 · 서버가 다시 시작되어도 자동 복원됩니다." : "임시 보관 중 · 영구 저장소 설정 전에는 서버 재시작 시 키가 사라집니다.";
+  $("keyStorageStatus").classList.toggle("persistent", state.key_storage === "persistent");
   $("topicTitle").textContent = state.topic || "모델들이 역할과 연구 주제를 선정합니다";
   $("questionText").textContent = state.question || "네 모델이 먼저 역할을 협의하고 AI 분야의 주제를 선정합니다.";
   $("phaseText").textContent = phaseName(state.phase, state.round) || "준비";
@@ -260,7 +262,7 @@ function render(state) {
   const countValid = new Set(PROVIDERS.map((provider) => assignment[provider])).size === ACCOUNTS.length;
   const providerValid = assignmentValid(state, assignment);
   const modelsValid = PROVIDERS.every((provider) => !!$("model-" + provider).value);
-  $("assignmentStatus").textContent = !connected ? "네 사람이 각자 키를 연결해야 합니다." : !countValid ? "각 사람이 정확히 한 모델을 맡아야 합니다." : !providerValid ? "선택한 계정에서 사용할 수 없는 모델이 있습니다." : "네 사람에게 모델 하나씩 배정 완료";
+  $("assignmentStatus").textContent = !connected ? "네 칸에 키를 연결해야 합니다." : !countValid ? "각 칸이 정확히 한 모델을 맡아야 합니다." : !providerValid ? "선택한 계정에서 사용할 수 없는 모델이 있습니다." : "네 칸에 모델 하나씩 배정 완료";
   $("assignmentStatus").className = "assignment-status " + (providerValid && modelsValid ? "valid" : "invalid");
   $("startBtn").disabled = !connected || active || state.status === "stopping" || !providerValid || !modelsValid;
   $("pauseBtn").disabled = state.status !== "running";
@@ -287,7 +289,7 @@ function render(state) {
     if (!messages.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.innerHTML = '<span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 네 사람이 BAZE 키를 연결하면 네 모델이 역할과 주제를 정하고 차례로 토론합니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button>';
+      empty.innerHTML = '<span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 네 칸의 BAZE 키를 연결하면 네 모델이 역할과 주제를 정하고 차례로 토론합니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button>';
       empty.querySelector("[data-open]").addEventListener("click", () => openTab("settings"));
       timeline.append(empty);
     }
@@ -319,33 +321,37 @@ for (const provider of PROVIDERS) $("account-" + provider).addEventListener("cha
   } catch { /* 다음 자동 새로고침에서 반영 */ }
 });
 
-$("connectBtn").addEventListener("click", async () => {
+document.querySelectorAll(".connect-key").forEach((button) => button.addEventListener("click", async () => {
   if (requestBusy) return;
+  const slot = button.dataset.slot;
+  const input = $("apiKey-" + slot);
   requestBusy = true;
-  $("connectBtn").disabled = true;
+  button.disabled = true;
   try {
-    await post("/api/connect", {key:$("apiKey").value});
-    $("apiKey").value = "";
+    await post("/api/connect", {slot, key:input.value});
+    input.value = "";
     lastAccountSignature = "";
-    toast("내 키와 사용 가능한 모델을 확인했습니다.");
+    toast(`${LABELS[slot]} 키를 연결하고 사용 가능한 모델을 확인했습니다.`);
     await refresh();
   } catch (error) { toast(error.message, true); }
-  finally { $("connectBtn").disabled = false; requestBusy = false; }
-});
+  finally { requestBusy = false; button.disabled = false; }
+}));
 
-$("disconnectBtn").addEventListener("click", async () => {
+document.querySelectorAll(".disconnect-key").forEach((button) => button.addEventListener("click", async () => {
   if (requestBusy) return;
+  const slot = button.dataset.slot;
+  if (!window.confirm(`${LABELS[slot]} 키를 저장소에서도 삭제할까요?`)) return;
   requestBusy = true;
-  $("disconnectBtn").disabled = true;
+  button.disabled = true;
   try {
-    await post("/api/disconnect");
-    $("apiKey").value = "";
+    await post("/api/disconnect", {slot});
+    $("apiKey-" + slot).value = "";
     lastAccountSignature = "";
-    toast("내 키 연결을 해제했습니다.");
+    toast(`${LABELS[slot]} 키를 삭제했습니다.`);
     await refresh();
   } catch (error) { toast(error.message, true); }
   finally { requestBusy = false; }
-});
+}));
 
 $("startBtn").addEventListener("click", async () => {
   const models = Object.fromEntries(PROVIDERS.map((provider) => [provider, $("model-" + provider).value]));

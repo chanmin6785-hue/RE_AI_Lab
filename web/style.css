@@ -22,4 +22,9 @@
 .activity-detail details{margin-top:17px}.activity-detail summary{cursor:pointer;color:#5d6fd5;font-size:11px;font-weight:700;margin-bottom:8px}
 .key-row input{min-width:0;flex:1}.key-row button{flex:none;white-space:nowrap}
 .disconnect-button{margin-top:10px;border:0;background:transparent;color:#b25868;font-size:11px;font-weight:700;padding:5px 0}.disconnect-button:hover:not(:disabled){text-decoration:underline}
+.key-slot{display:grid;grid-template-columns:42px minmax(0,1fr) 52px 38px;align-items:center;column-gap:7px;padding:9px 0;border-top:1px solid #eef0f7}
+.key-slot label{margin:0;font-size:12px}.key-slot input{margin:0;min-width:0}.key-slot button{white-space:nowrap;padding:9px 7px}.key-slot .disconnect-button{margin:0;padding:7px 0}
+.key-slot span{grid-column:2/-1;font-size:10px;color:#9a7280;margin-top:5px}.key-slot span.ready{color:#258760}
+.key-storage-status{margin:12px 0 0!important;font-size:10px!important}.key-storage-status.persistent{color:#24845c}
+@media(max-width:520px){.key-slot{grid-template-columns:42px minmax(0,1fr) 48px 34px;gap:5px}.key-slot button{font-size:10px;padding:9px 4px}}
 
