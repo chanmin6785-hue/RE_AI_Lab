@@ -480,6 +480,11 @@ class Lab:
             f"[{m['actor']}{'/' + m['provider'] if m['provider'] else ''}] {m['content']}"
             for m in self.messages if m["actor"] != "system"
         )[-28000:]
+        changes = "\n".join(
+            f"- {item['provider'].upper()}: {item['from']} → {item['to']} "
+            f"(호출 #{item['after_turn']} 이후; 이유: {item['reason']})"
+            for item in self.model_changes[-12:]
+        )
         last_speaker = provider == self.call_order[-1]
         if phase == "role_selection":
             task = (
@@ -518,6 +523,7 @@ class Lab:
             f"현재 단계: {phase}; 이번 발언 순서: {' → '.join(self.call_order)}\n"
             f"현재 연구 주제: {self.topic or 'AI 분야의 연구 주제를 네 모델이 선정 중'}\n"
             f"연구 질문: {self.question or '선정 중'}\n"
+            f"모델 교체 기록:\n{changes or '(없음)'}\n"
             f"당신의 이번 역할: {task}\n\n"
             f"이전 토론:\n{transcript or '(첫 발언)'}\n\n"
             f"연구 자료:\n{self._materials() or '(아직 등록되지 않음)'}"
@@ -1045,7 +1051,8 @@ def main() -> None:
             parser.error("서로 다른 20자 이상의 BAZE_LAB_OWNER_PASSWORD, BAZE_LAB_FRIEND_PASSWORD, BAZE_LAB_MEMBER3_PASSWORD, BAZE_LAB_MEMBER4_PASSWORD를 설정하세요.")
         try:
             key_store = store_from_environment()
-            CloudHandler.lab = Lab(key_store=key_store, project_store=SupabaseProjectStore(key_store))
+            CloudHandler.lab = Lab(key_store=key_store,
+                                   project_store=SupabaseProjectStore(key_store) if key_store else None)
         except KeyStoreError as exc:
             parser.error(str(exc))
         CloudHandler.public_host = host

@@ -239,6 +239,7 @@ class LabTest(unittest.TestCase):
         gemini = [item for item in self.lab.activities if item["provider"] == "gemini"]
         self.assertEqual(gemini[0]["model"], "gemini-test")
         self.assertTrue(all(item["model"] == "gemini-next" for item in gemini[1:]))
+        self.assertTrue(any("gemini-test → gemini-next" in prompt for _, _, prompt, _ in self.control.calls[change["after_turn"]:]))
         self.assertEqual(self.lab.public_state()["model_changes"], [change])
         self.assertIn("gemini-next", (self.lab.project / "manifest.json").read_text(encoding="utf-8"))
 
