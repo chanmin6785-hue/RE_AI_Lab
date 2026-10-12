@@ -86,7 +86,7 @@ GitHub에 코드를 올릴 수는 있지만, [GitHub Pages는 Python 서버를 �
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/chanmin6785-hue/RE_AI_Lab)
 
-`Dockerfile`은 HTTPS 프록시 뒤에서 네 사람이 각각 로그인하는 서버를 실행합니다. Render에서는 `BAZE_LAB_PUBLIC_HOST`를 설정할 필요가 없습니다. 아래 네 환경 변수에 **서로 다른 20자 이상의 로그인 암호**를 설정하세요. 암호를 코드나 GitHub 저장소에 적지 마세요. 네 계정은 연구 설정·대화·자료·시작/중지에 같은 권한을 가집니다. **네 사람 누구나 사이트의 네 칸에 BAZE 키를 등록·교체·삭제할 수 있습니다.** 키 값은 화면이나 상태 API에 다시 표시되지 않습니다.
+`Dockerfile`은 HTTPS 프록시 뒤에서 네 사람이 각각 로그인하는 서버를 실행합니다. Render에서는 `BAZE_LAB_PUBLIC_HOST`를 설정할 필요가 없습니다. 아래 네 환경 변수에 **서로 다른 20자 이상의 로그인 암호**를 설정하세요. 암호를 코드나 GitHub 저장소에 적지 마세요. 사이트를 열면 로그인 페이지에서 참여자 번호와 암호를 입력합니다. 로그인 상태는 보안 쿠키로 유지되며 화면 오른쪽 위에서 로그아웃할 수 있습니다. 네 계정은 연구 설정·대화·자료·시작/중지에 같은 권한을 가집니다. **네 사람 누구나 사이트의 네 칸에 BAZE 키를 등록·교체·삭제할 수 있습니다.** 키 값은 화면이나 상태 API에 다시 표시되지 않습니다.
 
 | Render 환경 변수 | 로그인 사용자 이름 |
 | --- | --- |

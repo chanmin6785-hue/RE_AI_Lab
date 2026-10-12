@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>로그인 · AI R&E Lab</title>
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <main class="login-card">
+    <div class="mark" aria-hidden="true">✦</div>
+    <p class="eyebrow">SHARED RESEARCH ROOM</p>
+    <h1>AI R&E Lab</h1>
+    <p class="intro">네 사람이 함께 연구 대화를 보고 참여하는 공간입니다.</p>
+    <!-- LOGIN_ERROR -->
+    <form method="post" action="/login">
+      <label for="account">참여자</label>
+      <select id="account" name="account" autocomplete="username" required>
+        <option value="1415">1415</option>
+        <option value="1314">1314</option>
+        <option value="1410">1410</option>
+        <option value="1411">1411</option>
+      </select>
+      <label for="password">로그인 암호</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit">연구실 입장하기 <span aria-hidden="true">↗</span></button>
+    </form>
+    <p class="hint">각 참여자의 암호는 Render에 설정된 기존 암호를 그대로 사용합니다.</p>
+  </main>
+</body>
+</html>

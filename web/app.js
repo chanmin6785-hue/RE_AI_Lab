@@ -13,6 +13,12 @@ let requestBusy = false;
 let lastError = "";
 let selfActor = "user";
 
+$('logoutBtn').addEventListener('click', async () => {
+  const response = await fetch('/logout', {method:'POST'});
+  if (response.ok) location.replace('/login');
+  else toast('로그아웃하지 못했습니다. 다시 시도하세요.', true);
+});
+
 function openTab(name) {
   for (const section of ["chat", "activity", "files", "settings"]) $(section + "Panel").hidden = section !== name;
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -220,6 +226,7 @@ function renderActivities(activities) {
 
 function render(state) {
   selfActor = state.self_actor || "user";
+  $('logoutBtn').hidden = !state.cloud;
   const active = ["running", "paused"].includes(state.status);
   const connected = state.connected;
   const accounts = state.accounts || {};

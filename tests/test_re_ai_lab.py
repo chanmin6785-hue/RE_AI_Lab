@@ -1,4 +1,6 @@
 import base64
+import hashlib
+from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -11,6 +13,7 @@ import time
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -392,6 +395,62 @@ class LabTest(unittest.TestCase):
             with urlopen(request) as response:
                 self.assertEqual(json.load(response)["actor"], "user")
             self.assertEqual(self.lab.clients["user"].api_key, "OWNER_REPLACED_KEY")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+
+    def test_cloud_login_page_session_and_logout(self):
+        CloudHandler.lab = self.lab
+        CloudHandler.public_host = "lab.example.test"
+        CloudHandler.passwords = {actor: f"{label}-long-test-password-123456789" for actor, label in CLOUD_USERS.items()}
+        CloudHandler.session_key = hashlib.sha256("\x00".join(CloudHandler.passwords[actor] for actor in ("user", "friend", "member3", "member4")).encode()).digest()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), CloudHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def request(method, path, body=None, cookie=None, origin="https://lab.example.test", host="lab.example.test"):
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            headers = {"Host": host}
+            if origin is not None and method == "POST":
+                headers["Origin"] = origin
+            if cookie:
+                headers["Cookie"] = cookie
+            if body is not None:
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            result = response.status, dict(response.getheaders()), response.read()
+            connection.close()
+            return result
+
+        try:
+            status, headers, _ = request("GET", "/")
+            self.assertEqual((status, headers.get("Location")), (303, "/login"))
+            status, _, page = request("GET", "/login")
+            self.assertEqual(status, 200)
+            for label in CLOUD_USERS.values():
+                self.assertIn(label.encode(), page)
+            self.assertNotIn(b"password-123456789", page)
+            self.assertEqual(request("GET", "/api/state")[0], 401)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":"wrong"}))[0], 303)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"]}), origin="https://evil.test")[0], 403)
+            for actor, label in CLOUD_USERS.items():
+                body = urlencode({"account":label, "password":CloudHandler.passwords[actor]})
+                status, headers, _ = request("POST", "/login", body)
+                self.assertEqual((status, headers.get("Location")), (303, "/"))
+                cookie = headers["Set-Cookie"].split(";", 1)[0]
+                self.assertIn("Secure; HttpOnly; SameSite=Lax", headers["Set-Cookie"])
+                status, _, state = request("GET", "/api/state", cookie=cookie)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(state)["self_actor"], actor)
+                self.assertTrue(json.loads(state)["cloud"])
+                self.assertEqual(request("GET", "/", cookie=cookie)[0], 200)
+                tampered = cookie[:-1] + ("A" if cookie[-1] != "A" else "B")
+                self.assertEqual(request("GET", "/api/state", cookie=tampered)[0], 401)
+                status, headers, _ = request("POST", "/logout", cookie=cookie)
+                self.assertEqual((status, headers.get("Location")), (303, "/login"))
+                self.assertIn("Max-Age=0", headers["Set-Cookie"])
         finally:
             server.shutdown()
             server.server_close()

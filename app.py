@@ -6,7 +6,9 @@ import argparse
 import base64
 import csv
 from datetime import datetime, timezone
+import hashlib
 import hmac
+from http.cookies import CookieError, SimpleCookie
 from io import BytesIO
 import json
 import os
@@ -16,7 +18,7 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 from uuid import uuid4
 from zipfile import ZipFile, ZIP_DEFLATED
 
@@ -690,8 +692,57 @@ class CloudHandler(Handler):
     """Four password-protected participants behind an HTTPS hosting proxy."""
     public_host: str
     passwords: dict[str, str]
+    session_key: bytes
+    session_lifetime = 7 * 24 * 60 * 60
+
+    def _cookie_actor(self) -> str:
+        try:
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get("Cookie", ""))
+            token = cookie["re_lab_session"].value
+            actor, expiry, signature = token.split(".", 2)
+            if actor not in ACCOUNTS or int(expiry) < time.time():
+                return ""
+            message = f"{actor}.{expiry}".encode("ascii")
+            expected = base64.urlsafe_b64encode(hmac.new(self.session_key, message, hashlib.sha256).digest()).decode("ascii").rstrip("=")
+            return actor if hmac.compare_digest(signature, expected) else ""
+        except (CookieError, KeyError, ValueError, UnicodeError):
+            return ""
+
+    def _session_cookie(self, actor: str) -> str:
+        expiry = str(int(time.time()) + self.session_lifetime)
+        message = f"{actor}.{expiry}".encode("ascii")
+        signature = base64.urlsafe_b64encode(hmac.new(self.session_key, message, hashlib.sha256).digest()).decode("ascii").rstrip("=")
+        return f"re_lab_session={actor}.{expiry}.{signature}; Max-Age={self.session_lifetime}; Path=/; Secure; HttpOnly; SameSite=Lax"
+
+    def _redirect(self, path: str, cookie: str = "") -> None:
+        self.send_response(303)
+        self.send_header("Location", path)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _login_page(self) -> None:
+        page = (ASSETS / "login.html").read_text(encoding="utf-8")
+        error = '<p class="login-error" role="alert">번호 또는 암호를 확인하세요.</p>' if urlsplit(self.path).query == "error=1" else ""
+        data = page.replace("<!-- LOGIN_ERROR -->", error).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _actor(self) -> str:
+        actor = self._cookie_actor()
+        if actor:
+            return actor
         authorization = self.headers.get("Authorization", "")
         for actor, name in CLOUD_USERS.items():
             password = self.passwords[actor]
@@ -703,11 +754,10 @@ class CloudHandler(Handler):
     def _require_auth(self) -> bool:
         if self._actor():
             return True
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="AI R&E Lab", charset="UTF-8"')
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        if self.path.startswith("/api/"):
+            self._json(401, {"error": "로그인이 필요합니다."})
+        else:
+            self._redirect("/login")
         return False
 
     def _local_host(self) -> bool:
@@ -717,16 +767,66 @@ class CloudHandler(Handler):
         return self.headers.get("Origin") == f"https://{self.public_host}"
 
     def _state(self) -> dict:
-        return {**self.lab.public_state(), "self_actor": self._actor()}
+        return {**self.lab.public_state(), "self_actor": self._actor(), "cloud": True}
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
             self._json(200, {"ok": True})
             return
+        if not self._local_host():
+            self._json(403, {"error": "올바른 연구실 주소로 접속하세요."})
+            return
+        if urlsplit(self.path).path == "/login":
+            if self._actor():
+                self._redirect("/")
+            else:
+                self._login_page()
+            return
+        if self.path == "/login.css":
+            data = (ASSETS / "login.css").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self._require_auth():
             super().do_GET()
 
     def do_POST(self) -> None:
+        if not self._local_host():
+            self._json(403, {"error": "올바른 연구실 주소로 접속하세요."})
+            return
+        if self.path == "/login":
+            if not self._valid_origin():
+                self._json(403, {"error": "이 화면에서만 로그인할 수 있습니다."})
+                return
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/x-www-form-urlencoded":
+                self._json(415, {"error": "로그인 형식이 올바르지 않습니다."})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 4096:
+                    raise ValueError
+                form = parse_qs(self.rfile.read(length).decode("utf-8"), strict_parsing=True)
+                name, password = form["account"][0], form["password"][0]
+            except (ValueError, UnicodeError, KeyError, IndexError):
+                self._redirect("/login?error=1")
+                return
+            actor = next((key for key, label in CLOUD_USERS.items() if label == name), "")
+            if not actor or not hmac.compare_digest(password, self.passwords[actor]):
+                self._redirect("/login?error=1")
+                return
+            self._redirect("/", self._session_cookie(actor))
+            return
+        if self.path == "/logout":
+            if not self._valid_origin():
+                self._json(403, {"error": "이 화면에서만 로그아웃할 수 있습니다."})
+                return
+            self._redirect("/login", "re_lab_session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax")
+            return
         if self._require_auth():
             super().do_POST()
 
@@ -756,6 +856,7 @@ def main() -> None:
             parser.error(str(exc))
         CloudHandler.public_host = host
         CloudHandler.passwords = passwords
+        CloudHandler.session_key = hashlib.sha256("\x00".join(passwords[actor] for actor in ACCOUNTS).encode("utf-8")).digest()
         port = int(os.environ.get("PORT", str(args.port)))
         server = ThreadingHTTPServer(("0.0.0.0", port), CloudHandler)
         print(f"AI R&E cloud server listening on port {port}", flush=True)

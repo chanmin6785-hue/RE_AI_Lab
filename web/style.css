@@ -26,5 +26,6 @@
 .key-slot label{margin:0;font-size:12px}.key-slot input{margin:0;min-width:0}.key-slot button{white-space:nowrap;padding:9px 7px}.key-slot .disconnect-button{margin:0;padding:7px 0}
 .key-slot span{grid-column:2/-1;font-size:10px;color:#9a7280;margin-top:5px}.key-slot span.ready{color:#258760}
 .key-storage-status{margin:12px 0 0!important;font-size:10px!important}.key-storage-status.persistent{color:#24845c}
+.logout-button{border:1px solid #e2e6f1;background:#fff;border-radius:7px;color:#7e8799;padding:6px 9px;font-size:10px;font-weight:700}.logout-button:hover{color:#5966de;border-color:#cdd4f5}
 @media(max-width:520px){.key-slot{grid-template-columns:42px minmax(0,1fr) 48px 34px;gap:5px}.key-slot button{font-size:10px;padding:9px 4px}}
 
