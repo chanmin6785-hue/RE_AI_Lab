@@ -14,6 +14,7 @@
     <p class="intro">네 사람이 함께 연구 대화를 보고 참여하는 공간입니다.</p>
     <!-- LOGIN_ERROR -->
     <form method="post" action="/login">
+      <input type="hidden" name="csrf" value="<!-- LOGIN_CSRF -->">
       <label for="account">참여자</label>
       <select id="account" name="account" autocomplete="username" required>
         <option value="1415">1415</option>

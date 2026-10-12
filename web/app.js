@@ -12,9 +12,10 @@ let toastTimer;
 let requestBusy = false;
 let lastError = "";
 let selfActor = "user";
+let csrfToken = "";
 
 $('logoutBtn').addEventListener('click', async () => {
-  const response = await fetch('/logout', {method:'POST'});
+  const response = await fetch('/logout', {method:'POST',headers:{'X-RE-Lab-CSRF':csrfToken}});
   if (response.ok) location.replace('/login');
   else toast('로그아웃하지 못했습니다. 다시 시도하세요.', true);
 });
@@ -41,7 +42,7 @@ function toast(message, error = false) {
 }
 
 async function post(path, data = {}) {
-  const response = await fetch(path, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
+  const response = await fetch(path, {method:"POST",headers:{"Content-Type":"application/json","X-RE-Lab-CSRF":csrfToken},body:JSON.stringify(data)});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "요청에 실패했습니다.");
   return result;
@@ -226,6 +227,7 @@ function renderActivities(activities) {
 
 function render(state) {
   selfActor = state.self_actor || "user";
+  csrfToken = state.csrf_token || "";
   $('logoutBtn').hidden = !state.cloud;
   const active = ["running", "paused"].includes(state.status);
   const connected = state.connected;

@@ -409,7 +409,7 @@ class LabTest(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
 
-        def request(method, path, body=None, cookie=None, origin="https://lab.example.test", host="lab.example.test"):
+        def request(method, path, body=None, cookie=None, origin="https://lab.example.test", host="lab.example.test", extra=None):
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
             headers = {"Host": host}
             if origin is not None and method == "POST":
@@ -418,6 +418,7 @@ class LabTest(unittest.TestCase):
                 headers["Cookie"] = cookie
             if body is not None:
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
+            headers.update(extra or {})
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             result = response.status, dict(response.getheaders()), response.read()
@@ -427,28 +428,44 @@ class LabTest(unittest.TestCase):
         try:
             status, headers, _ = request("GET", "/")
             self.assertEqual((status, headers.get("Location")), (303, "/login"))
-            status, _, page = request("GET", "/login")
+            status, login_headers, page = request("GET", "/login")
             self.assertEqual(status, 200)
             for label in CLOUD_USERS.values():
                 self.assertIn(label.encode(), page)
             self.assertNotIn(b"password-123456789", page)
+            csrf = re.search(rb'name="csrf" value="([^"]+)"', page).group(1).decode()
+            login_cookie = login_headers["Set-Cookie"].split(";", 1)[0]
+            self.assertIn("Secure; HttpOnly; SameSite=Strict", login_headers["Set-Cookie"])
             self.assertEqual(request("GET", "/api/state")[0], 401)
-            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":"wrong"}))[0], 303)
-            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"]}), origin="https://evil.test")[0], 403)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":"wrong", "csrf":csrf}), cookie=login_cookie)[0], 303)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":csrf}), origin="https://evil.test")[0], 403)
+            self.assertEqual(request("POST", "/login", urlencode({"account":"1415", "password":CloudHandler.passwords["user"], "csrf":"tampered"}), cookie=login_cookie, origin=None)[0], 403)
             for actor, label in CLOUD_USERS.items():
-                body = urlencode({"account":label, "password":CloudHandler.passwords[actor]})
-                status, headers, _ = request("POST", "/login", body)
+                body = urlencode({"account":label, "password":CloudHandler.passwords[actor], "csrf":csrf})
+                status, headers, _ = request("POST", "/login", body, cookie=login_cookie, origin="null")
                 self.assertEqual((status, headers.get("Location")), (303, "/"))
                 cookie = headers["Set-Cookie"].split(";", 1)[0]
                 self.assertIn("Secure; HttpOnly; SameSite=Lax", headers["Set-Cookie"])
                 status, _, state = request("GET", "/api/state", cookie=cookie)
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(state)["self_actor"], actor)
-                self.assertTrue(json.loads(state)["cloud"])
+                state = json.loads(state)
+                self.assertEqual(state["self_actor"], actor)
+                self.assertTrue(state["cloud"])
+                self.assertTrue(state["csrf_token"])
                 self.assertEqual(request("GET", "/", cookie=cookie)[0], 200)
+                if actor == "user":
+                    status, _, result = request("POST", "/api/connect", '{"slot":"user","key":"OWNER_COOKIE_TEST_KEY"}', cookie=cookie,
+                                                origin="null", extra={"X-RE-Lab-CSRF":state["csrf_token"], "Content-Type":"application/json"})
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(result)["actor"], "user")
+                    status, _, result = request("POST", "/api/disconnect", '{"slot":"friend"}', cookie=cookie,
+                                                origin=None, extra={"X-RE-Lab-CSRF":state["csrf_token"], "Content-Type":"application/json"})
+                    self.assertEqual(status, 200)
+                    self.assertFalse(json.loads(result)["accounts"]["friend"]["connected"])
                 tampered = cookie[:-1] + ("A" if cookie[-1] != "A" else "B")
                 self.assertEqual(request("GET", "/api/state", cookie=tampered)[0], 401)
-                status, headers, _ = request("POST", "/logout", cookie=cookie)
+                self.assertEqual(request("POST", "/logout", cookie=cookie, origin=None, extra={"X-RE-Lab-CSRF":"wrong"})[0], 403)
+                status, headers, _ = request("POST", "/logout", cookie=cookie, origin=None, extra={"X-RE-Lab-CSRF":state["csrf_token"]})
                 self.assertEqual((status, headers.get("Location")), (303, "/login"))
                 self.assertIn("Max-Age=0", headers["Set-Cookie"])
         finally:

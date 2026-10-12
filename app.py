@@ -715,6 +715,32 @@ class CloudHandler(Handler):
         signature = base64.urlsafe_b64encode(hmac.new(self.session_key, message, hashlib.sha256).digest()).decode("ascii").rstrip("=")
         return f"re_lab_session={actor}.{expiry}.{signature}; Max-Age={self.session_lifetime}; Path=/; Secure; HttpOnly; SameSite=Lax"
 
+    def _login_token(self) -> str:
+        body = f"{int(time.time()) + 600}.{secrets.token_urlsafe(18)}"
+        signature = base64.urlsafe_b64encode(hmac.new(self.session_key, f"login.{body}".encode(), hashlib.sha256).digest()).decode().rstrip("=")
+        return f"{body}.{signature}"
+
+    def _valid_login_token(self, token: str) -> bool:
+        try:
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get("Cookie", ""))
+            stored = cookie["re_lab_login_csrf"].value
+            expiry, nonce, signature = token.split(".", 2)
+            if int(expiry) < time.time() or not hmac.compare_digest(token, stored):
+                return False
+            expected = base64.urlsafe_b64encode(hmac.new(self.session_key, f"login.{expiry}.{nonce}".encode(), hashlib.sha256).digest()).decode().rstrip("=")
+            return hmac.compare_digest(signature, expected)
+        except (CookieError, KeyError, ValueError, UnicodeError):
+            return False
+
+    def _api_csrf(self) -> str:
+        if not self._cookie_actor():
+            return ""
+        cookie = SimpleCookie()
+        cookie.load(self.headers.get("Cookie", ""))
+        token = cookie["re_lab_session"].value
+        return base64.urlsafe_b64encode(hmac.new(self.session_key, f"api.{token}".encode(), hashlib.sha256).digest()).decode().rstrip("=")
+
     def _redirect(self, path: str, cookie: str = "") -> None:
         self.send_response(303)
         self.send_header("Location", path)
@@ -727,9 +753,11 @@ class CloudHandler(Handler):
     def _login_page(self) -> None:
         page = (ASSETS / "login.html").read_text(encoding="utf-8")
         error = '<p class="login-error" role="alert">번호 또는 암호를 확인하세요.</p>' if urlsplit(self.path).query == "error=1" else ""
-        data = page.replace("<!-- LOGIN_ERROR -->", error).encode("utf-8")
+        token = self._login_token()
+        data = page.replace("<!-- LOGIN_ERROR -->", error).replace("<!-- LOGIN_CSRF -->", token).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Set-Cookie", f"re_lab_login_csrf={token}; Max-Age=600; Path=/login; Secure; HttpOnly; SameSite=Strict")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -764,10 +792,15 @@ class CloudHandler(Handler):
         return self.headers.get("Host", "").lower() == self.public_host
 
     def _valid_origin(self) -> bool:
-        return self.headers.get("Origin") == f"https://{self.public_host}"
+        origin = self.headers.get("Origin", "")
+        if origin == f"https://{self.public_host}":
+            return True
+        expected = self._api_csrf()
+        supplied = self.headers.get("X-RE-Lab-CSRF", "")
+        return bool(expected and supplied) and hmac.compare_digest(expected, supplied)
 
     def _state(self) -> dict:
-        return {**self.lab.public_state(), "self_actor": self._actor(), "cloud": True}
+        return {**self.lab.public_state(), "self_actor": self._actor(), "cloud": True, "csrf_token": self._api_csrf()}
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -800,9 +833,6 @@ class CloudHandler(Handler):
             self._json(403, {"error": "올바른 연구실 주소로 접속하세요."})
             return
         if self.path == "/login":
-            if not self._valid_origin():
-                self._json(403, {"error": "이 화면에서만 로그인할 수 있습니다."})
-                return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/x-www-form-urlencoded":
                 self._json(415, {"error": "로그인 형식이 올바르지 않습니다."})
                 return
@@ -811,9 +841,12 @@ class CloudHandler(Handler):
                 if length <= 0 or length > 4096:
                     raise ValueError
                 form = parse_qs(self.rfile.read(length).decode("utf-8"), strict_parsing=True)
-                name, password = form["account"][0], form["password"][0]
+                name, password, csrf = form["account"][0], form["password"][0], form["csrf"][0]
             except (ValueError, UnicodeError, KeyError, IndexError):
                 self._redirect("/login?error=1")
+                return
+            if not self._valid_login_token(csrf):
+                self._json(403, {"error": "로그인 화면을 새로고침한 뒤 다시 시도하세요."})
                 return
             actor = next((key for key, label in CLOUD_USERS.items() if label == name), "")
             if not actor or not hmac.compare_digest(password, self.passwords[actor]):
