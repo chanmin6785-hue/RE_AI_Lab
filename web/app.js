@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const PROVIDERS = ["gpt", "claude", "gemini", "grok"];
 const ACCOUNTS = ["user", "friend", "member3", "member4"];
-const LABELS = {gpt:"GPT",claude:"Claude",gemini:"Gemini",grok:"Grok",user:"연구자",friend:"친구",member3:"참여자 3",member4:"참여자 4"};
+const LABELS = {gpt:"GPT",claude:"Claude",gemini:"Gemini",grok:"Grok",user:"1415",friend:"1314",member3:"1410",member4:"1411"};
 let lastMessageId = "";
 let lastAccountSignature = "";
 let lastRoleSignature = "";

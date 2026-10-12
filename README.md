@@ -69,15 +69,15 @@ cd 'RE_AI_Lab'
 python .\app.py --share
 ```
 
-내 화면은 `http://127.0.0.1:8765`입니다. 친구, 참여자 3, 참여자 4의 화면은 각각 `http://127.0.0.1:8766`, `http://127.0.0.1:8767`, `http://127.0.0.1:8768`에 열립니다. 각 화면의 `viewer` 로그인 암호가 PowerShell 창에 표시됩니다. 암호는 실행할 때마다 새로 생성됩니다.
+1415 화면은 `http://127.0.0.1:8765`입니다. 1314, 1410, 1411 화면은 각각 `http://127.0.0.1:8766`, `http://127.0.0.1:8767`, `http://127.0.0.1:8768`에 열립니다. 각 화면의 `viewer` 로그인 암호가 PowerShell 창에 표시됩니다. 암호는 실행할 때마다 새로 생성됩니다.
 
-다른 장소에서 접속하려면 각 참여자 포트마다 별도 터널이 필요합니다. 예를 들어 친구 화면은 두 번째 PowerShell에서 같은 폴더로 이동한 뒤:
+다른 장소에서 접속하려면 각 참여자 포트마다 별도 터널이 필요합니다. 예를 들어 1314 화면은 두 번째 PowerShell에서 같은 폴더로 이동한 뒤:
 
 ```powershell
 .\tools\cloudflared.exe tunnel --url http://127.0.0.1:8766
 ```
 
-출력에 표시되는 `https://....trycloudflare.com` 주소와 **사용자 이름 `viewer`**, 첫 번째 창의 **친구 암호**를 친구에게 알려 주세요. 참여자 3과 4는 각각 8767, 8768 포트로 같은 명령을 별도 PowerShell에서 실행합니다. 공유 주소는 임시 주소라 터널을 다시 켜면 바뀝니다. 종료할 때는 각 창에서 `Ctrl+C`를 누릅니다. URL이나 암호를 공개 게시물에 올리지 마세요.
+출력에 표시되는 `https://....trycloudflare.com` 주소와 **사용자 이름 `viewer`**, 첫 번째 창의 **1314 암호**를 1314에게 알려 주세요. 1410과 1411은 각각 8767, 8768 포트로 같은 명령을 별도 PowerShell에서 실행합니다. 공유 주소는 임시 주소라 터널을 다시 켜면 바뀝니다. 종료할 때는 각 창에서 `Ctrl+C`를 누릅니다. URL이나 암호를 공개 게시물에 올리지 마세요.
 
 `tools/cloudflared.exe`는 저장소에 포함하지 않습니다. 공유하려면 [Cloudflare 공식 다운로드](https://developers.cloudflare.com/tunnel/downloads/)에서 직접 설치한 뒤 위 명령의 실행 파일 경로를 조정하세요. 임시 URL 방식은 [Cloudflare Quick Tunnels 안내](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)를 따릅니다.
 
@@ -91,10 +91,12 @@ GitHub에 코드를 올릴 수는 있지만, [GitHub Pages는 Python 서버를 �
 
 | Render 환경 변수 | 로그인 사용자 이름 |
 | --- | --- |
-| `BAZE_LAB_OWNER_PASSWORD` | `owner` |
-| `BAZE_LAB_FRIEND_PASSWORD` | `friend` |
-| `BAZE_LAB_MEMBER3_PASSWORD` | `member3` |
-| `BAZE_LAB_MEMBER4_PASSWORD` | `member4` |
+| `BAZE_LAB_OWNER_PASSWORD` | `1415` |
+| `BAZE_LAB_FRIEND_PASSWORD` | `1314` |
+| `BAZE_LAB_MEMBER3_PASSWORD` | `1410` |
+| `BAZE_LAB_MEMBER4_PASSWORD` | `1411` |
+
+환경 변수 이름은 기존 Render 암호 설정을 재사용하려고 유지합니다. 사이트 화면과 로그인 사용자 이름에는 네 숫자만 표시됩니다.
 
 이미 만든 Render Blueprint에 새 암호 변수 두 개를 추가했다면, `sync: false` 변수는 다시 묻지 않으므로 서비스의 **Environment**에서 직접 입력하고 **Save only**로 저장하세요. 이어 **Deploys → Manual Deploy → Deploy latest commit**을 선택해야 GitHub의 네 명 버전과 새 암호가 함께 적용됩니다.
 

@@ -28,8 +28,8 @@ PROJECTS = Path(os.environ.get("BAZE_LAB_PROJECTS_DIR", str(ROOT / "projects")))
 ASSETS = ROOT / "web"
 ORDER = ("gpt", "claude", "gemini", "grok")
 ACCOUNTS = ("user", "friend", "member3", "member4")
-ACCOUNT_LABELS = {"user": "연구자", "friend": "친구", "member3": "참여자 3", "member4": "참여자 4"}
-CLOUD_USERS = {"user": "owner", "friend": "friend", "member3": "member3", "member4": "member4"}
+ACCOUNT_LABELS = {"user": "1415", "friend": "1314", "member3": "1410", "member4": "1411"}
+CLOUD_USERS = dict(ACCOUNT_LABELS)
 CLOUD_PASSWORD_KEYS = {"user": "BAZE_LAB_OWNER_PASSWORD", "friend": "BAZE_LAB_FRIEND_PASSWORD",
                        "member3": "BAZE_LAB_MEMBER3_PASSWORD", "member4": "BAZE_LAB_MEMBER4_PASSWORD"}
 MAX_UPLOAD = 2_000_000
@@ -724,7 +724,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="네 모델 AI R&E 로컬 채팅")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--share", "--share-viewer", dest="share", action="store_true", help="친구와 같은 권한의 암호 보호 화면을 엽니다")
+    parser.add_argument("--share", "--share-viewer", dest="share", action="store_true", help="1314·1410·1411과 같은 권한의 암호 보호 화면을 엽니다")
     parser.add_argument("--viewer-port", type=int, default=8766)
     parser.add_argument("--cloud", action="store_true", help="HTTPS 프록시 뒤의 네 사용자 서버를 엽니다")
     args = parser.parse_args()

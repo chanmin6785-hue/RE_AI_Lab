@@ -15,7 +15,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app import Lab, ViewerHandler, CloudHandler
+from app import Lab, ViewerHandler, CloudHandler, ACCOUNT_LABELS, CLOUD_USERS
 from baze_models import Reply
 
 
@@ -111,6 +111,7 @@ class LabTest(unittest.TestCase):
         self.assertEqual(state["datasets"], ["sample.csv"])
         self.assertTrue((self.lab.project / "research" / "role_selection.md").exists())
         self.assertTrue((self.lab.project / "results" / "discussion_draft.md").exists())
+        self.assertIn("1415", (self.lab.project / "results" / "discussion_draft.md").read_text(encoding="utf-8"))
         self.assertEqual(len(list((self.lab.project / "data/raw/responses").glob("*.json"))), 12)
         self.assertEqual(self.lab.turn_detail(1)["status"], "completed")
         self.assertTrue(self.lab.turn_detail(1)["response"])
@@ -199,6 +200,13 @@ class LabTest(unittest.TestCase):
         ids = set(re.findall(r'id="([^"]+)"', html))
         refs = set(re.findall(r'\$\("([^"]+)"\)', script))
         self.assertFalse(refs - ids, f"Missing HTML controls: {refs - ids}")
+        self.assertEqual(ACCOUNT_LABELS, {"user": "1415", "friend": "1314", "member3": "1410", "member4": "1411"})
+        self.assertEqual(CLOUD_USERS, ACCOUNT_LABELS)
+        for label in ACCOUNT_LABELS.values():
+            self.assertIn(label, html)
+            self.assertIn(label, script)
+        for old_label in ("연구자", "친구", "참여자 3", "참여자 4"):
+            self.assertNotIn(old_label, html + script)
 
     def test_friend_connects_own_key_and_has_full_shared_controls(self):
         ViewerHandler.lab = self.lab
@@ -300,10 +308,11 @@ class LabTest(unittest.TestCase):
             with self.assertRaises(HTTPError) as unauth:
                 urlopen(Request(root + "/api/state", headers={"Host": "lab.example.test"}))
             self.assertEqual(unauth.exception.code, 401)
-            for actor, name, password in (("user", "owner", CloudHandler.passwords["user"]),
-                                          ("friend", "friend", CloudHandler.passwords["friend"]),
-                                          ("member3", "member3", CloudHandler.passwords["member3"]),
-                                          ("member4", "member4", CloudHandler.passwords["member4"])):
+            with self.assertRaises(HTTPError) as old_name:
+                urlopen(Request(root + "/api/state", headers=headers("owner", CloudHandler.passwords["user"])))
+            self.assertEqual(old_name.exception.code, 401)
+            for actor, password in CloudHandler.passwords.items():
+                name = CLOUD_USERS[actor]
                 with urlopen(Request(root + "/api/state", headers=headers(name, password))) as response:
                     state = json.load(response)
                 self.assertEqual(state["self_actor"], actor)
@@ -312,16 +321,16 @@ class LabTest(unittest.TestCase):
                 self.assertNotIn("MEMBER3_SECRET_TEST_KEY", json.dumps(state))
                 self.assertNotIn("MEMBER4_SECRET_TEST_KEY", json.dumps(state))
             with self.assertRaises(HTTPError) as wrong_host:
-                urlopen(Request(root + "/api/state", headers=headers("owner", CloudHandler.passwords["user"], host="evil.test")))
+                urlopen(Request(root + "/api/state", headers=headers("1415", CloudHandler.passwords["user"], host="evil.test")))
             self.assertEqual(wrong_host.exception.code, 403)
             with self.assertRaises(HTTPError) as wrong_origin:
                 request = Request(root + "/api/disconnect", data=b"{}", method="POST",
-                                  headers={**headers("friend", CloudHandler.passwords["friend"], "https://evil.test"),
+                                  headers={**headers("1314", CloudHandler.passwords["friend"], "https://evil.test"),
                                            "Content-Type": "application/json"})
                 urlopen(request)
             self.assertEqual(wrong_origin.exception.code, 403)
             request = Request(root + "/api/disconnect", data=b"{}", method="POST",
-                              headers={**headers("friend", CloudHandler.passwords["friend"], "https://lab.example.test"),
+                              headers={**headers("1314", CloudHandler.passwords["friend"], "https://lab.example.test"),
                                        "Content-Type": "application/json"})
             with urlopen(request) as response:
                 state = json.load(response)
@@ -330,7 +339,7 @@ class LabTest(unittest.TestCase):
             self.assertTrue(state["accounts"]["member3"]["connected"])
             self.assertTrue(state["accounts"]["member4"]["connected"])
             for actor in ("member3", "member4"):
-                name = actor
+                name = CLOUD_USERS[actor]
                 request = Request(root + "/api/connect", data=json.dumps({"key": actor.upper() + "_REPLACED_KEY"}).encode(), method="POST",
                                   headers={**headers(name, CloudHandler.passwords[actor], "https://lab.example.test"),
                                            "Content-Type": "application/json"})
