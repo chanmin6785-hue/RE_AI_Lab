@@ -62,6 +62,15 @@
             <label for="account-grok">Grok</label><select id="account-grok"><option value="user">1415</option><option value="friend">1314</option><option value="member3">1410</option><option value="member4">1411</option></select><select id="model-grok" disabled><option>연결 후 선택</option></select></div>
           <p id="assignmentStatus" class="assignment-status">각 사람이 한 모델을 맡아야 합니다.</p>
           <button id="startBtn" class="primary" disabled>연구 시작하기 <span>↗</span></button></section>
+        <section class="card settings-card"><div class="card-icon">↻</div><h2>진행 중 모델 교체</h2>
+          <p>연구를 일시정지하고 현재 응답이 끝나면 모델을 바꿀 수 있습니다. 이전 발언과 자료는 유지되고, 다음 발언부터 새 모델 ID가 적용됩니다. 교체 시점과 이유는 연구 기록에 남습니다.</p>
+          <label for="swapProvider">바꿀 모델 계열</label><select id="swapProvider"><option value="gpt">GPT</option><option value="claude">Claude</option><option value="gemini" selected>Gemini</option><option value="grok">Grok</option></select>
+          <p id="swapCurrent">현재 모델: 연구 시작 후 표시</p>
+          <label for="swapModel">새 BAZE 모델 ID</label><input id="swapModel" type="text" autocomplete="off" placeholder="예: BAZE에서 확인한 정확한 Gemini 모델 ID">
+          <label for="swapReason">교체 이유</label><input id="swapReason" type="text" maxlength="500" placeholder="예: 새 모델의 성능을 비교하기 위해">
+          <button id="swapBtn" class="secondary" disabled>모델 교체 기록하고 적용</button>
+          <p id="swapStatus">연구를 일시정지한 뒤 교체할 수 있습니다.</p>
+          <div id="swapHistory"></div></section>
       </div>
     </main>
   </div>

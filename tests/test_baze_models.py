@@ -80,7 +80,7 @@ class BazeTests(unittest.TestCase):
         cases = [
             ("gpt", gpt_reply(), "/responses/"),
             ("claude", claude_reply(), "/claude/v1/messages/"),
-            ("gemini", gemini_reply(), "/gemini/v1beta/models/gemini-3.7-flash:generateContent"),
+            ("gemini", gemini_reply(), "/gemini/v1beta/models/gemini-3.8-flash:generateContent"),
             ("grok", grok_reply(), "/chat/completions/"),
         ]
         for provider, raw, route in cases:
@@ -175,6 +175,17 @@ class BazeTests(unittest.TestCase):
         self.assertEqual(client.list_models("claude"), ["claude-a", "claude-b"])
         self.assertEqual(fake.requests[0][0].method, "GET")
         self.assertTrue(fake.requests[0][0].full_url.endswith("/models/?type=llm"))
+
+    def test_credits_and_usage_read_only_routes(self):
+        balance = {"object": "credit_balance", **{name: {"remaining": 5000.0}
+                   for name in ("monthly_allocated", "purchased", "org_granted", "total")}}
+        summary = {"object": "usage_summary", "rows": [], "total": {"credits": 0}}
+        client, fake = self.client(balance, summary)
+        self.assertEqual(client.credits()["monthly_allocated"]["remaining"], 5000.0)
+        self.assertEqual(client.usage(group_by="model", scope="member")["rows"], [])
+        self.assertTrue(fake.requests[0][0].full_url.endswith("/credits/"))
+        self.assertTrue(fake.requests[1][0].full_url.endswith("/usage/?by=model&scope=member"))
+        self.assertTrue(all(request.method == "GET" for request, _ in fake.requests))
 
     def test_model_override_and_validation(self):
         client, fake = self.client()

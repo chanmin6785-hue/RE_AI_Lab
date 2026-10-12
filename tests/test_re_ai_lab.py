@@ -1,4 +1,5 @@
 import base64
+import copy
 import hashlib
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -38,7 +39,7 @@ class FakeClient:
 
     def list_models(self):
         provider = {"OWNER": "gpt", "FRIEND": "claude", "MEMBER3": "gemini", "MEMBER4": "grok"}[self.api_key.split("_", 1)[0]]
-        return [f"{provider}-test"]
+        return [f"{provider}-test", f"{provider}-next"]
 
     def ask(self, provider, prompt, model, max_tokens):
         calls = self.control.calls
@@ -203,6 +204,109 @@ class LabTest(unittest.TestCase):
         self.lab.resume()
         self.wait_done()
         self.assertEqual(self.lab.public_state()["status"], "completed", self.lab.public_state()["error"])
+
+    def test_model_swap_preserves_earlier_model_and_changes_later_turns(self):
+        self.lab.start(1, self.models, self.assignments, step_mode=True)
+        self.assertTrue(self.control.entered.wait(2))
+        with self.assertRaisesRegex(ValueError, "일시정지"):
+            self.lab.swap_model("gemini", "gemini-next", actor="friend")
+        self.lab.pause()
+        with self.assertRaisesRegex(ValueError, "응답"):
+            self.lab.swap_model("gemini", "gemini-next", actor="friend")
+        self.control.release.set()
+        deadline = time.monotonic() + 3
+        while any(item["status"] == "waiting" for item in self.lab.public_state()["activities"]) and time.monotonic() < deadline:
+            time.sleep(.01)
+        while not any(item["provider"] == "gemini" and item["status"] == "completed"
+                      for item in self.lab.public_state()["activities"]):
+            self.lab.resume()
+            deadline = time.monotonic() + 3
+            while self.lab.public_state()["status"] == "running" and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertLess(time.monotonic(), deadline)
+        change = self.lab.swap_model("gemini", "gemini-next", actor="friend", reason="새 버전 비교")
+        self.assertEqual(change["from"], "gemini-test")
+        self.assertEqual(change["after_turn"], len(self.control.calls))
+        with self.assertRaisesRegex(ValueError, "정확한 모델 ID"):
+            self.lab.swap_model("gemini", "gemini-unknown", actor="friend")
+        while self.lab.public_state()["status"] == "paused":
+            self.lab.resume()
+            deadline = time.monotonic() + 3
+            while self.lab.public_state()["status"] == "running" and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertLess(time.monotonic(), deadline)
+        self.wait_done()
+        gemini = [item for item in self.lab.activities if item["provider"] == "gemini"]
+        self.assertEqual(gemini[0]["model"], "gemini-test")
+        self.assertTrue(all(item["model"] == "gemini-next" for item in gemini[1:]))
+        self.assertEqual(self.lab.public_state()["model_changes"], [change])
+        self.assertIn("gemini-next", (self.lab.project / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_project_checkpoint_restores_paused_research_without_repeating_completed_call(self):
+        class MemoryProjectStore:
+            def __init__(self):
+                self.snapshot = None
+                self.files = {}
+            def save(self, project, snapshot):
+                self.snapshot = copy.deepcopy(snapshot)
+                self.files = {path.relative_to(project): path.read_bytes() for path in project.rglob("*") if path.is_file()}
+            def load(self, target):
+                if self.snapshot is None:
+                    return None
+                project = target / self.snapshot["project_name"]
+                for relative, data in self.files.items():
+                    path = project / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                return copy.deepcopy(self.snapshot)
+        store = MemoryProjectStore()
+        self.lab.project_store = store
+        self.lab.start(1, self.models, self.assignments, step_mode=True)
+        self.assertTrue(self.control.entered.wait(2))
+        self.control.release.set()
+        deadline = time.monotonic() + 3
+        while self.lab.public_state()["status"] != "paused" and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertEqual(len(self.control.calls), 1)
+        self.lab.intervene("데이터 출처 확인", actor="member4")
+        self.lab.upload("evidence.csv", base64.b64encode(b"x,y\n1,2\n").decode())
+        self.lab.project_store = None
+        self.lab.stop()
+        self.lab.worker.join(5)
+        restored = Lab(lambda key, timeout: FakeClient(key, timeout, self.control), self.temp, project_store=store)
+        for actor, client in self.lab.clients.items():
+            restored.clients[actor] = client
+        restored.assignments = dict(self.assignments)
+        self.assertEqual(restored.public_state()["status"], "paused")
+        self.assertEqual(restored.public_state()["datasets"], ["evidence.csv"])
+        self.assertTrue(any("데이터 출처" in msg["content"] for msg in restored.messages))
+        restored.swap_model("gemini", "gemini-next", actor="user")
+        restored.step_mode = False
+        restored.resume()
+        restored.worker.join(5)
+        self.assertEqual(restored.status, "completed", restored.error)
+        self.assertEqual(len(self.control.calls), 12)
+        self.assertEqual(len([a for a in restored.activities if a["status"] == "completed"]), 12)
+
+    def test_failed_model_swap_does_not_claim_new_model(self):
+        class FailingProjectStore:
+            def save(self, project, snapshot):
+                raise KeyStoreError("연구 저장소 오류")
+        self.lab.start(1, self.models, self.assignments, step_mode=True)
+        self.assertTrue(self.control.entered.wait(2))
+        self.control.release.set()
+        deadline = time.monotonic() + 3
+        while self.lab.public_state()["status"] != "paused" and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.lab.project_store = FailingProjectStore()
+        before = (self.lab.project / "data/raw/conversation.jsonl").read_bytes()
+        with self.assertRaises(KeyStoreError):
+            self.lab.swap_model("gemini", "gemini-next", actor="user")
+        self.assertEqual(self.lab.models["gemini"], "gemini-test")
+        self.assertEqual(self.lab.model_changes, [])
+        self.assertEqual((self.lab.project / "data/raw/conversation.jsonl").read_bytes(), before)
+        self.lab.project_store = None
+        self.lab.stop()
 
     def test_stop_at_turn_boundary(self):
         self.lab.start(1, self.models, self.assignments)

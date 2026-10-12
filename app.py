@@ -24,6 +24,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 from baze_models import BazeClient, BazeError, DEFAULT_MODELS
 from key_store import KeyStoreError, store_from_environment
+from project_store import ProjectStoreError, SupabaseProjectStore
 
 
 ROOT = Path(__file__).resolve().parent
@@ -60,10 +61,11 @@ def atomic_json(path: Path, data: dict) -> None:
 
 
 class Lab:
-    def __init__(self, client_factory=BazeClient, projects: Path = PROJECTS, key_store=None):
+    def __init__(self, client_factory=BazeClient, projects: Path = PROJECTS, key_store=None, project_store=None):
         self.client_factory = client_factory
         self.projects = projects
         self.key_store = key_store
+        self.project_store = project_store
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.clients: dict[str, BazeClient] = {}
@@ -73,6 +75,10 @@ class Lab:
             for actor, (key, models) in self.key_store.load_all().items():
                 self.clients[actor] = self.client_factory(key, timeout=150.0)
                 self.available_by_account[actor] = models
+        if self.project_store:
+            saved = self.project_store.load(self.projects)
+            if saved:
+                self._restore(saved)
 
     def reset(self) -> None:
         self.status = "idle"
@@ -89,11 +95,49 @@ class Lab:
         self.call_order: tuple[str, ...] = ORDER
         self.activities: list[dict] = []
         self.messages: list[dict] = []
+        self.model_changes: list[dict] = []
         self.project: Path | None = None
         self.error = ""
         self.turn_no = 0
         self.stop_requested = False
         self.worker = None
+
+    def _snapshot(self) -> dict:
+        return {"project_name": self.project.name, "status": self.status, "phase": self.phase,
+                "round_no": self.round_no, "current_model": self.current_model,
+                "topic": self.topic, "question": self.question, "rounds": self.rounds,
+                "step_mode": self.step_mode, "models": self.models,
+                "assignments": self.assignments, "roles": self.roles,
+                "call_order": list(self.call_order), "activities": self.activities,
+                "messages": self.messages, "model_changes": self.model_changes,
+                "error": self.error, "turn_no": self.turn_no,
+                "stop_requested": self.stop_requested}
+
+    def _checkpoint(self) -> None:
+        if self.project_store and self.project:
+            self.project_store.save(self.project, self._snapshot())
+
+    def _restore(self, saved: dict) -> None:
+        self.project = self.projects / saved["project_name"]
+        for field in ("status", "phase", "round_no", "current_model", "topic", "question",
+                      "rounds", "step_mode", "models", "assignments", "roles", "activities",
+                      "messages", "error", "turn_no", "stop_requested", "model_changes"):
+            if field in saved:
+                setattr(self, field, saved[field])
+        self.call_order = tuple(saved.get("call_order", ORDER))
+        if self.status in ("running", "paused", "stopping"):
+            # A stopped process cannot know whether a pending gateway request was billed.
+            # Require a person to resume; never silently repeat a paid call.
+            self.status = "paused"
+            self.stop_requested = False
+            self.current_model = ""
+            for item in self.activities:
+                if item.get("status") == "waiting":
+                    item.update(status="interrupted", error="서버가 재시작되어 응답 확인 불가. 재개 시 이 발언을 다시 시도할 수 있습니다.")
+            self.turn_no = max([self.turn_no] + [int(item["turn"]) for item in self.activities])
+            self.error = "서버가 재시작되었습니다. 기록을 복원했습니다. 재개 전에 마지막 호출을 확인하세요."
+            self._write_manifest()
+            self._checkpoint()
 
     def connect(self, key: str, actor: str = "user") -> dict:
         if actor not in ACCOUNTS:
@@ -149,6 +193,7 @@ class Lab:
             return {
                 "connected": all(actor in self.clients for actor in ACCOUNTS),
                 "key_storage": "persistent" if self.key_store else "temporary",
+                "project_storage": "persistent" if self.project_store else "temporary",
                 "accounts": {
                     actor: {"connected": actor in self.clients,
                             "available": self.available_by_account.get(actor, {provider: [] for provider in ORDER})}
@@ -163,10 +208,12 @@ class Lab:
                 "topic": self.topic,
                 "question": self.question,
                 "models": self.models,
+                "defaults": DEFAULT_MODELS,
                 "assignments": self.assignments,
                 "roles": self.roles,
                 "call_order": self.call_order,
                 "activities": [dict(item) for item in self.activities],
+                "model_changes": [dict(item) for item in self.model_changes],
                 "messages": list(self.messages),
                 "project": str(self.project) if self.project else "",
                 "error": self.error,
@@ -185,6 +232,7 @@ class Lab:
             "call_order": self.call_order,
             "pause_after_each_reply": self.step_mode,
             "completed_turns": self.turn_no,
+            "model_changes": self.model_changes,
             "note": "모델 발언은 연구 초안입니다. 외부 사실·출처·실험 결과는 별도 검증이 필요합니다.",
         })
 
@@ -218,6 +266,8 @@ class Lab:
                     raise ValueError(f"{provider} 모델은 담당 계정에서 사용할 수 없습니다.")
                 chosen[provider] = model
             self.reset()
+            if self.project_store and hasattr(self.project_store, "hashes"):
+                self.project_store.hashes.clear()
             self.rounds, self.models = rounds, chosen
             self.assignments = {provider: assignments[provider] for provider in ORDER}
             self.call_order = tuple(secrets.SystemRandom().sample(ORDER, len(ORDER)))
@@ -237,6 +287,13 @@ class Lab:
             self.status, self.phase = "running", "role_selection"
             self._append("system", "네 칸의 키가 각각 한 모델의 호출을 맡습니다. 네 모델이 연구 역할을 논의해 정한 뒤 AI R&E 주제를 선정합니다.")
             self._write_manifest()
+            try:
+                self._checkpoint()
+            except Exception as exc:
+                self.status = "failed"
+                self.error = self._safe_error(exc)
+                self._write_manifest()
+                raise
             self.worker = threading.Thread(target=self._run, daemon=True)
             self.worker.start()
             return self.public_state()
@@ -250,7 +307,9 @@ class Lab:
         with self.lock:
             if self.status not in ("running", "paused"):
                 raise ValueError("진행 중인 연구에서만 참여할 수 있습니다.")
-            return self._append(actor, content, phase=self.phase, round_no=self.round_no)
+            result = self._append(actor, content, phase=self.phase, round_no=self.round_no)
+            self._checkpoint()
+            return result
 
     def pause(self) -> None:
         with self.condition:
@@ -258,23 +317,95 @@ class Lab:
                 raise ValueError("진행 중인 연구가 없습니다.")
             self.status = "paused"
             self._write_manifest()
+            try:
+                self._checkpoint()
+            except Exception:
+                self.status = "running"
+                self._write_manifest()
+                self.condition.notify_all()
+                raise
 
     def resume(self) -> None:
         with self.condition:
             if self.status != "paused":
                 raise ValueError("일시정지된 연구가 없습니다.")
             self.status = "running"
-            self.condition.notify_all()
             self._write_manifest()
+            try:
+                self._checkpoint()
+            except Exception:
+                self.status = "paused"
+                self._write_manifest()
+                raise
+            if self.worker is None or not self.worker.is_alive():
+                self.worker = threading.Thread(target=self._run, daemon=True)
+                self.worker.start()
+            else:
+                self.condition.notify_all()
 
     def stop(self) -> None:
         with self.condition:
             if self.status not in ("running", "paused"):
                 raise ValueError("진행 중인 연구가 없습니다.")
+            previous_status = self.status
             self.stop_requested = True
             self.status = "stopping"
-            self.condition.notify_all()
             self._write_manifest()
+            try:
+                self._checkpoint()
+            except Exception:
+                self.stop_requested = False
+                self.status = previous_status
+                self._write_manifest()
+                raise
+            self.condition.notify_all()
+
+    def swap_model(self, provider: str, model: str, actor: str = "user", reason: str = "") -> dict:
+        provider, model, reason = provider.strip().lower(), model.strip(), reason.strip()[:500]
+        if actor not in ACCOUNTS or provider not in ORDER:
+            raise ValueError("참여자 또는 모델 계열을 확인하세요.")
+        with self.lock:
+            if self.status != "paused" or any(item["status"] == "waiting" for item in self.activities):
+                raise ValueError("모델 응답이 끝난 뒤 연구가 일시정지된 상태에서 교체하세요.")
+            account = self.assignments[provider]
+            client = self.clients.get(account)
+        if not client:
+            raise ValueError("담당 계정의 BAZE 키가 연결되지 않았습니다.")
+        try:
+            available = client.list_models()
+        except Exception as exc:
+            raise ValueError(self._safe_error(exc)) from exc
+        if not model.startswith(provider + "-") or model not in available:
+            raise ValueError("담당 계정에서 사용할 수 있는 해당 계열의 정확한 모델 ID를 입력하세요.")
+        with self.lock:
+            if self.status != "paused" or any(item["status"] == "waiting" for item in self.activities):
+                raise ValueError("모델 응답이 끝난 뒤 다시 시도하세요.")
+            previous = self.models[provider]
+            if previous == model:
+                raise ValueError("이미 사용 중인 모델입니다.")
+            change = {"at": now(), "provider": provider, "from": previous, "to": model,
+                      "account": account, "actor": actor, "after_turn": self.turn_no,
+                      "reason": reason or "참여자가 연구 도중 모델을 교체함"}
+            manifest_path = self.project / "manifest.json"
+            transcript_path = self.project / "data" / "raw" / "conversation.jsonl"
+            old_manifest = manifest_path.read_bytes()
+            old_transcript_size = transcript_path.stat().st_size
+            self.models[provider] = model
+            self.model_changes.append(change)
+            self._append("system", f"{provider.upper()} 모델 변경: {previous} → {model}. "
+                         f"{ACCOUNT_LABELS[actor]} 요청. 이유: {change['reason']}")
+            self._write_manifest()
+            try:
+                self._checkpoint()
+            except Exception:
+                self.models[provider] = previous
+                self.model_changes.pop()
+                self.messages.pop()
+                manifest_path.write_bytes(old_manifest)
+                with transcript_path.open("rb+") as fh:
+                    fh.truncate(old_transcript_size)
+                raise
+            return change
 
     def dataset_names(self) -> list[str]:
         if not self.project:
@@ -314,6 +445,7 @@ class Lab:
                 path = path.with_name(f"{path.stem}_{uuid4().hex[:6]}{path.suffix}")
             path.write_bytes(content)
             self._append("system", f"자료 추가: {path.name} ({len(content):,}바이트). 다음 모델 발언부터 반영됩니다.")
+            self._checkpoint()
             return path.name
 
     def add_source(self, title: str, url: str, note: str) -> None:
@@ -326,6 +458,7 @@ class Lab:
             with (self.project / "references" / "sources.csv").open("a", newline="", encoding="utf-8") as fh:
                 csv.writer(fh).writerow([now(), title, url, note])
             self._append("system", f"출처 등록: {title} — {url}. 내용은 자동 검증되지 않았습니다.")
+            self._checkpoint()
 
     def _materials(self) -> str:
         if not self.project:
@@ -426,6 +559,10 @@ class Lab:
 
     def _turn(self, phase: str, provider: str, round_no: int) -> bool:
         with self.condition:
+            if any(item.get("status") == "completed" and item.get("phase") == phase
+                   and item.get("provider") == provider and item.get("round") == round_no
+                   for item in self.activities):
+                return not self.stop_requested
             while self.status == "paused" and not self.stop_requested:
                 self.condition.wait()
             if self.stop_requested:
@@ -441,6 +578,7 @@ class Lab:
                     "account": account, "model": model, "status": "waiting", "started_at": now()}
             self.activities.append(item)
             self._activity_event(item)
+            self._checkpoint()
         started = time.monotonic()
         try:
             reply = client.ask(provider, prompt, model=model, max_tokens=3000 if phase == "role_selection" else 16000)
@@ -448,6 +586,7 @@ class Lab:
             with self.condition:
                 item.update(status="failed", finished_at=now(), error=self._safe_error(exc))
                 self._activity_event(item)
+                self._checkpoint()
             raise
         latency = round(time.monotonic() - started, 3)
         with self.condition:
@@ -476,9 +615,10 @@ class Lab:
                     f"# 주제 선정\n\n연구 주제: {self.topic}\n\n연구 질문: {self.question}\n\n"
                     "선정 근거와 이견은 data/raw/conversation.jsonl의 주제 선정 발언을 확인하세요.\n",
                     encoding="utf-8")
-            if self.step_mode and self.turn_no < 8 + self.rounds * 4 and not self.stop_requested:
+            if self.step_mode and sum(i["status"] == "completed" for i in self.activities) < 8 + self.rounds * 4 and not self.stop_requested:
                 self.status = "paused"
             self._write_manifest()
+            self._checkpoint()
             return not self.stop_requested
 
     def _finish(self) -> None:
@@ -496,6 +636,7 @@ class Lab:
             lines.extend([f"## {label} · {msg['phase']} · {msg['at']}", "", msg["content"], ""])
         (self.project / "results" / "discussion_draft.md").write_text("\n".join(lines), encoding="utf-8")
         self._write_manifest()
+        self._checkpoint()
 
     def _run(self) -> None:
         try:
@@ -628,6 +769,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.lab.pause(); result = self.lab.public_state()
             elif path == "/api/resume":
                 self.lab.resume(); result = self.lab.public_state()
+            elif path == "/api/swap-model":
+                result = self.lab.swap_model(str(data.get("provider", "")), str(data.get("model", "")),
+                                             actor=self._actor(), reason=str(data.get("reason", "")))
             elif path == "/api/stop":
                 self.lab.stop(); result = self.lab.public_state()
             elif path == "/api/upload":
@@ -901,7 +1045,7 @@ def main() -> None:
             parser.error("서로 다른 20자 이상의 BAZE_LAB_OWNER_PASSWORD, BAZE_LAB_FRIEND_PASSWORD, BAZE_LAB_MEMBER3_PASSWORD, BAZE_LAB_MEMBER4_PASSWORD를 설정하세요.")
         try:
             key_store = store_from_environment()
-            CloudHandler.lab = Lab(key_store=key_store)
+            CloudHandler.lab = Lab(key_store=key_store, project_store=SupabaseProjectStore(key_store))
         except KeyStoreError as exc:
             parser.error(str(exc))
         CloudHandler.public_host = host

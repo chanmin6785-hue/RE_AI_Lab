@@ -29,11 +29,11 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 
 
 BASE_URL = "https://factchat.mindlogic-kr-api.com/v1/gateway"
-# 2026-10-01에 확인한 BAZE 문서의 예시 ID. 계정별 제공 여부는 다릅니다.
+# 연구실의 선택 모델. 계정별 제공 여부는 시작 전에 /models/로 확인합니다.
 DEFAULT_MODELS = {
-    "gpt": "gpt-6-astra",
-    "claude": "claude-sonnet-5",
-    "gemini": "gemini-3.7-flash",
+    "gpt": "gpt-6.1-sol",
+    "claude": "claude-sonnet-5-5",
+    "gemini": "gemini-3.8-flash",
     "grok": "grok-4.7",
 }
 
@@ -144,6 +144,33 @@ class BazeClient:
             raise BazeError("모델 목록 응답에 data 배열이 없습니다.")
         ids = sorted({item["id"] for item in result["data"] if isinstance(item, dict) and item.get("id")})
         return [name for name in ids if provider is None or name.startswith(provider + "-")]
+
+    def credits(self) -> dict[str, Any]:
+        """Read this API key's account balance in credits, without spending them."""
+        result = self._request("/credits/")
+        if result.get("object") != "credit_balance":
+            raise BazeError("크레딧 잔액 응답 형식이 올바르지 않습니다.")
+        for bucket in ("monthly_allocated", "purchased", "org_granted", "total"):
+            value = result.get(bucket)
+            if not isinstance(value, dict) or not isinstance(value.get("remaining"), (int, float)):
+                raise BazeError("크레딧 잔액 응답에 필요한 값이 없습니다.")
+        return result
+
+    def usage(self, *, group_by: str = "day", scope: str = "key",
+              from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
+        """Read Gateway-only usage; browser chat usage is excluded by BAZE."""
+        from urllib.parse import urlencode
+        if group_by not in ("day", "model", "key") or scope not in ("key", "member"):
+            raise ValueError("사용량 묶음 또는 조회 범위가 올바르지 않습니다.")
+        params = {"by": group_by, "scope": scope}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        result = self._request("/usage/?" + urlencode(params))
+        if result.get("object") != "usage_summary" or not isinstance(result.get("rows"), list):
+            raise BazeError("사용량 응답 형식이 올바르지 않습니다.")
+        return result
 
     def chat(self, provider: str, *, model: str | None = None,
              system: str = "한국어로 명확하게 답변하세요.", max_tokens: int = 16000) -> BazeChat:

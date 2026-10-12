@@ -48,7 +48,7 @@ async function post(path, data = {}) {
   return result;
 }
 
-function setSelect(provider, options, preferred) {
+function setSelect(provider, options, preferred, fallback) {
   const el = $("model-" + provider);
   el.replaceChildren();
   if (!options.length) {
@@ -63,7 +63,7 @@ function setSelect(provider, options, preferred) {
       option.textContent = id;
       el.append(option);
     }
-    el.value = options.includes(preferred) ? preferred : options[0];
+    el.value = options.includes(preferred) ? preferred : options.includes(fallback) ? fallback : options[0];
   }
   el.disabled = !options.length;
 }
@@ -106,7 +106,9 @@ function updateModelChoices(state) {
   for (const provider of PROVIDERS) {
     const account = $("account-" + provider).value;
     const preferred = state.assignments?.[provider] ? state.models?.[provider] : $("model-" + provider).value;
-    setSelect(provider, availableFor(state, account, provider), preferred);
+    const options = [...availableFor(state, account, provider)];
+    if (state.assignments?.[provider] && preferred && !options.includes(preferred)) options.push(preferred);
+    setSelect(provider, options, preferred, state.defaults?.[provider]);
   }
 }
 
@@ -209,7 +211,7 @@ function renderActivities(activities) {
     title.textContent = `#${activity.turn} ${LABELS[activity.provider]} · ${phaseName(activity.phase, activity.round)} · ${LABELS[activity.account]} 계정`;
     const status = document.createElement("span");
     status.className = "activity-pill " + activity.status;
-    status.textContent = {waiting:"응답 대기",completed:"완료",failed:"실패"}[activity.status] || activity.status;
+    status.textContent = {waiting:"응답 대기",completed:"완료",failed:"실패",interrupted:"재시작으로 중단"}[activity.status] || activity.status;
     title.append(status);
     const button = document.createElement("button");
     button.type = "button";
@@ -276,6 +278,19 @@ function render(state) {
   $("startBtn").disabled = !connected || active || state.status === "stopping" || !providerValid || !modelsValid;
   $("pauseBtn").disabled = state.status !== "running";
   $("resumeBtn").disabled = state.status !== "paused";
+  const swapReady = state.status === "paused" && !(state.activities || []).some((item) => item.status === "waiting");
+  $("swapBtn").disabled = !swapReady || requestBusy;
+  $("swapCurrent").textContent = `현재 모델: ${state.models?.[$("swapProvider").value] || "연구 시작 후 표시"}`;
+  $("swapStatus").textContent = !state.project ? "연구 시작 후 사용할 수 있습니다." :
+    state.status === "running" ? "일시정지를 누르고 현재 응답이 끝날 때까지 기다리세요." :
+    state.status === "paused" && !swapReady ? "현재 모델 응답이 끝나면 교체할 수 있습니다." :
+    swapReady ? "지금 교체할 수 있습니다. 다음 발언부터 적용됩니다." : "진행 중인 연구가 없습니다.";
+  const history = state.model_changes || [];
+  $("swapHistory").replaceChildren(...history.map((change) => {
+    const item = document.createElement("p");
+    item.textContent = `${change.at} · ${LABELS[change.provider]} · ${change.from} → ${change.to} · ${LABELS[change.actor]} · ${change.reason}`;
+    return item;
+  }));
   $("stopBtn").disabled = !active;
   $("messageInput").disabled = !active;
   $("sendBtn").disabled = !active;
@@ -386,6 +401,18 @@ $("messageInput").addEventListener("keydown", (event) => {
 for (const action of ["pause","resume","stop"]) $(action + "Btn").addEventListener("click", async () => {
   try { await post("/api/" + action); await refresh(); }
   catch (error) { toast(error.message, true); }
+});
+
+$("swapProvider").addEventListener("change", refresh);
+$("swapBtn").addEventListener("click", async () => {
+  try {
+    const change = await post("/api/swap-model", {provider:$("swapProvider").value,
+      model:$("swapModel").value.trim(),reason:$("swapReason").value.trim()});
+    $("swapModel").value = "";
+    $("swapReason").value = "";
+    toast(`${LABELS[change.provider]} 모델을 ${change.to}로 교체했습니다.`);
+    await refresh();
+  } catch (error) { toast(error.message, true); }
 });
 
 $("copyPathBtn").addEventListener("click", async () => {

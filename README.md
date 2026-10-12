@@ -99,7 +99,7 @@ GitHub에 코드를 올릴 수는 있지만, [GitHub Pages는 Python 서버를 �
 
 ### 키를 재시작 후에도 보관하기
 
-Render 무료 Web Service는 유휴 중단·재시작·배포 때 메모리와 로컬 파일이 사라집니다. 네 키만 보존하려면 **별도 Supabase 프로젝트**를 만들고 [supabase-schema.sql](supabase-schema.sql)을 그 프로젝트의 SQL Editor에서 한 번 실행하세요. 이 테이블은 브라우저의 공개 키로 접근할 수 없으며, 서버가 AES-256-GCM으로 암호화한 키를 저장합니다. Supabase의 새 `sb_secret_...` 키는 **Render 서버에만** 설정하세요. 연구 자료 자체는 이 테이블에 저장하지 않습니다.
+Render 무료 Web Service는 유휴 중단·재시작·배포 때 메모리와 로컬 파일이 사라집니다. 키와 연구 기록을 보존하려면 **별도 Supabase 프로젝트**를 만들고 [supabase-schema.sql](supabase-schema.sql)을 그 프로젝트의 SQL Editor에서 한 번 실행하세요. 네 BAZE 키는 AES-256-GCM으로 암호화해 보관하며 연구 상태와 파일은 별도의 서버 전용 테이블에 저장합니다. 이 테이블은 브라우저의 공개 키로 접근할 수 없습니다. Supabase의 새 `sb_secret_...` 키는 **Render 서버에만** 설정하세요.
 
 Render 서비스의 **Environment**에 아래 세 변수를 모두 추가하고 **Save only**를 누른 뒤 **Deploys → Manual Deploy → Deploy latest commit**을 실행하세요. 세 변수를 전혀 설정하지 않으면 기존처럼 임시 보관으로 표시됩니다. 일부만 설정하면 배포가 실패하도록 하여 영구 저장이 되는 것처럼 오인하지 않게 했습니다.
 
@@ -115,8 +115,10 @@ python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_b
 
 암호화 키는 한 번 생성한 값을 Render에 보관하고 바꾸지 마세요. 바꾸면 기존에 저장한 BAZE 키를 복원할 수 없습니다. Supabase URL·비밀 키·암호화 키·BAZE 키는 이 저장소나 채팅에 올리지 마세요. 저장소 연결 뒤 사이트에서 네 칸의 BAZE 키를 **다시 한 번 등록해야** 이전 메모리 전용 값이 저장됩니다. 이후에는 서버가 재시작해도 자동 복원됩니다.
 
-연구 파일을 재배포·재시작 뒤에도 보존하려면 호스트의 **영구 저장 디스크**를 붙이고 `BAZE_LAB_PROJECTS_DIR`을 해당 디스크의 `projects` 폴더로 지정해야 합니다. 예를 들어 디스크가 `/data`에 붙었다면 `/data/projects`입니다. 디스크 없이 실행하면 호스트가 재시작할 때 연구 자료가 사라질 수 있습니다. **Supabase 설정은 BAZE 키 네 개만 보존합니다.** 진행 중이던 모델 호출도 재시작 시 이어지지 않습니다.
+설정 후 새로 시작하는 연구는 메시지, 호출 기록, 업로드 자료와 결과 파일을 Supabase에 저장합니다. 서버가 재시작되면 연구를 **일시정지** 상태로 복원하고 사람이 재개하도록 기다립니다. 재시작 당시 응답 대기 중이던 호출은 결과를 확인할 수 없어 `중단`으로 표시됩니다. 재개 시 해당 발언을 다시 시도할 수 있으므로 청구 여부를 BAZE에서 확인하세요. Supabase 무료 프로젝트의 저장 용량과 요청 제한을 넘기지 않도록 자료 크기를 관리하고 전체 ZIP도 주기적으로 내려받으세요.
 
-Render에서 GitHub 저장소의 **New → Blueprint**를 선택해 이 저장소의 `render.yaml`을 연결하면 무료 Web Service를 만들 수 있습니다. Render가 자동 제공하는 `RENDER_EXTERNAL_HOSTNAME`을 사용하므로 `BAZE_LAB_PUBLIC_HOST`를 따로 지정할 필요는 없습니다. 배포 화면에서 네 로그인 암호를 각각 입력하세요. 상태 확인 경로는 `/healthz`입니다. 무료 인스턴스는 유휴 시 중지되고 로컬 연구 파일이 재시작·재배포 후 유지되지 않습니다. 연구가 끝나면 반드시 **전체 ZIP 받기**로 기록을 내려받으세요. GitHub 저장소를 공개하더라도 API 키·로그인 암호·연구 자료는 저장소에 올리지 마세요.
+연구 도중 모델을 바꾸려면 **일시정지 → 현재 응답 완료 확인 → 연구 설정 → 진행 중 모델 교체**에서 BAZE에 등록된 새 모델의 정확한 ID를 입력하세요. 기존 발언은 기존 모델 ID를 유지하고, 이후 발언부터 새 ID가 적용됩니다. 교체 시점과 이유는 `manifest.json`과 채팅에 기록됩니다. Gemini 4 Argon이 실제로 해당 담당 계정에서 제공될 때 같은 방법으로 전환할 수 있습니다.
+
+Render에서 GitHub 저장소의 **New → Blueprint**를 선택해 이 저장소의 `render.yaml`을 연결하면 무료 Web Service를 만들 수 있습니다. Render가 자동 제공하는 `RENDER_EXTERNAL_HOSTNAME`을 사용하므로 `BAZE_LAB_PUBLIC_HOST`를 따로 지정할 필요는 없습니다. 배포 화면에서 네 로그인 암호를 각각 입력하세요. 상태 확인 경로는 `/healthz`입니다. 무료 인스턴스는 유휴 시 중지되므로 연구 상태와 파일을 보존하려면 위 Supabase 구성을 완료하세요. GitHub 저장소를 공개하더라도 API 키·로그인 암호·연구 자료는 저장소에 올리지 마세요.
 
 
