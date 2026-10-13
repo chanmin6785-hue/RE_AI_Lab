@@ -22,7 +22,8 @@
     <main id="chatPanel" class="chat-panel" aria-label="연구 대화">
       <div class="conversation">
         <div class="topic-strip"><span class="pin">✦ 연구 주제</span><strong id="topicTitle">모델들이 역할과 연구 주제를 선정합니다</strong><p id="questionText">연구를 시작하면 네 모델이 먼저 역할을 정한 뒤 AI 분야의 주제를 함께 선정합니다.</p></div>
-        <div class="progress-strip"><div><span class="activity-dot"></span><strong id="phaseText">준비</strong><span id="turnText">0 / 0 발언</span></div><div class="quick-actions"><button id="pauseBtn" disabled>일시정지</button><button id="resumeBtn" disabled>계속</button><button id="stopBtn" disabled>중지</button></div></div>
+        <div class="progress-strip"><div><span class="activity-dot"></span><strong id="phaseText">준비</strong><span id="turnText">0회 호출</span></div><div class="quick-actions"><button id="stepBtn" disabled>지금 진행</button><button id="pauseBtn" disabled>일시정지</button><button id="resumeBtn" disabled>계속</button><button id="stopBtn" disabled>중지</button></div></div>
+        <section id="workflowCard" class="workflow-card"><strong>R&E 진행 단계</strong><p id="workflowStatus">연구 시작 후 계획·실험·중간·최종 발표 단계가 표시됩니다.</p><p id="budgetStatus"></p><div id="reviewBox" hidden><p id="reviewPrompt"></p><textarea id="reviewFeedback" rows="3" placeholder="승인 의견 또는 수정 요청을 입력하세요"></textarea><div class="card-actions"><button id="approveBtn" class="primary">검토 후 승인</button><button id="reviseBtn" class="secondary">수정 요청</button></div></div></section>
         <section id="timeline" class="timeline" aria-live="polite"><div class="empty-state"><span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 BAZE에 연결하면 네 모델이 주제를 정하고 차례로 토론합니다. 이곳에서 대화를 지켜보며 직접 의견을 보낼 수 있습니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button></div></section>
         <div class="composer-area"><form id="messageForm" class="composer"><textarea id="messageInput" rows="1" placeholder="메시지를 입력하세요…" disabled></textarea><button id="sendBtn" type="submit" aria-label="메시지 보내기" disabled>➤</button></form><div class="composer-help">Enter로 보내기 · Shift+Enter로 줄바꿈 · 다음 모델 발언부터 반영됩니다</div></div>
       </div>
@@ -39,10 +40,11 @@
 
     <main id="filesPanel" class="page-panel" hidden>
       <div class="page-content"><div class="page-intro"><span class="eyebrow">SHARED FILES</span><h1>공유 자료</h1><p>네 사람이 올린 자료와 출처는 같은 연구 폴더에 저장됩니다.</p></div>
-        <div class="card-grid"><section class="card"><div class="card-icon">▤</div><h2>프로젝트 폴더</h2><p>연구 대화, 원본 응답, 결과 초안을 호스트 컴퓨터에 보관합니다.</p><p id="projectPath" class="path">연구 시작 후 생성됩니다.</p><div class="card-actions"><button id="copyPathBtn" class="secondary" disabled>경로 복사</button><button id="downloadBtn" class="secondary" disabled>전체 ZIP 받기</button></div></section>
+        <div class="card-grid"><section class="card"><div class="card-icon">▤</div><h2>프로젝트 폴더</h2><p>연구 대화, 원본 응답, 데이터셋, 실험 결과, 발표 자료를 보관합니다.</p><p id="projectPath" class="path">연구 시작 후 생성됩니다.</p><div class="card-actions"><button id="copyPathBtn" class="secondary" disabled>경로 복사</button><button id="downloadBtn" class="secondary" disabled>전체 ZIP 받기</button></div></section>
         <section class="card"><div class="card-icon">↑</div><h2>데이터셋 추가</h2><p>UTF-8 CSV · TSV · TXT · MD · JSON · JSONL, 최대 2MB</p><input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.md,.json,.jsonl" disabled><button id="uploadBtn" class="secondary" disabled>선택한 파일 올리기</button><ul id="datasetList" class="file-list"><li>아직 추가된 자료가 없습니다.</li></ul></section>
         <section class="card"><div class="card-icon">↗</div><h2>출처 기록</h2><p>제목과 URL, 수집 방법을 남겨 연구 기록에 포함합니다.</p><input id="sourceTitle" placeholder="자료 제목" disabled><input id="sourceUrl" type="url" placeholder="https://..." disabled><textarea id="sourceNote" rows="3" placeholder="출처·수집 방법 메모" disabled></textarea><button id="sourceBtn" class="secondary" disabled>출처 추가</button></section></div>
-        <p class="page-note">자료 내용과 출처는 자동 검증되지 않습니다. 모델이 만든 내용은 실제 관찰 결과와 구분해 확인하세요.</p>
+        <section class="card"><h2>검토할 보고서·발표 자료</h2><div id="deliverableList">아직 생성된 자료가 없습니다.</div></section>
+        <p class="page-note">AI 생성 실험 사례는 실제 관찰과 구분합니다. 출처와 결론을 사람이 확인한 뒤 각 발표 단계를 승인하세요.</p>
       </div>
     </main>
 
@@ -54,7 +56,7 @@
           <div class="key-slot"><label for="apiKey-member3">1410</label><input id="apiKey-member3" type="password" autocomplete="off" placeholder="1410의 BAZE API 키"><button class="secondary connect-key" data-slot="member3">저장</button><button class="disconnect-button disconnect-key" data-slot="member3">해제</button><span id="member3Connection">연결 전</span></div>
           <div class="key-slot"><label for="apiKey-member4">1411</label><input id="apiKey-member4" type="password" autocomplete="off" placeholder="1411의 BAZE API 키"><button class="secondary connect-key" data-slot="member4">저장</button><button class="disconnect-button disconnect-key" data-slot="member4">해제</button><span id="member4Connection">연결 전</span></div>
           <p id="keyStorageStatus" class="key-storage-status">저장소 상태 확인 중</p></section>
-        <section class="card settings-card"><div class="card-icon">✦</div><h2>네 모델이 역할과 주제 선정</h2><p>네 모델이 먼저 연구 역할을 협의합니다. 이어서 역할에 따라 주제를 토론하고 선정합니다. 각 사람의 키에 모델 하나씩 배정하세요.</p><label for="rounds">연구 토론 라운드</label><select id="rounds"><option value="1">1회 · 총 12번 호출</option><option value="2">2회 · 총 16번 호출</option><option value="3">3회 · 총 20번 호출</option></select><label class="check-row" for="stepMode"><input id="stepMode" type="checkbox"> 모델 발언마다 잠시 멈추기</label>
+        <section class="card settings-card"><div class="card-icon">✦</div><h2>자율 R&E 시작</h2><p>네 모델이 역할과 주제를 선정하고, 필요한 만큼 토론·실험합니다. 계획서·계획발표, 중간발표, 최종보고서·최종발표마다 네 사람이 자료를 검토하고 승인합니다. BAZE 잔액이 5,000 크레딧 미만이면 다음 한국 시간 자정 후 실제 잔액을 다시 확인합니다.</p>
           <div class="model-grid"><strong>모델</strong><strong>담당 계정</strong><strong>사용할 모델 ID</strong>
             <label for="account-gpt">GPT</label><select id="account-gpt"><option value="user">1415</option><option value="friend">1314</option><option value="member3">1410</option><option value="member4">1411</option></select><select id="model-gpt" disabled><option>연결 후 선택</option></select>
             <label for="account-claude">Claude</label><select id="account-claude"><option value="user">1415</option><option value="friend">1314</option><option value="member3">1410</option><option value="member4">1411</option></select><select id="model-claude" disabled><option>연결 후 선택</option></select>

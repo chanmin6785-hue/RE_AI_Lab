@@ -120,10 +120,34 @@ function displayName(message) {
 }
 
 function phaseName(phase, round) {
-  if (phase === "role_selection") return "역할 협의";
-  if (phase === "topic_selection") return "주제 선정";
-  if (phase === "research") return `토론 ${round}라운드`;
-  return "";
+  const names = {role_selection:"역할 협의",topic_selection:"주제 선정",research:`토론 ${round}라운드`,
+    roles:"역할 협의",topic:"주제 선정",plan_discussion:"연구 계획 토론",plan_report:"연구계획보고서",plan_slides:"계획발표 PPT",
+    plan_script:"계획발표 대본",plan_review:"계획 자료 검토",experiment_discussion:"실험 설계 토론",experiment_cases:"실험 사례 생성",
+    experiment_run:"실제 모델 실험",experiment_analysis:"실험 결과 분석",middle_slides:"중간발표 PPT",middle_script:"중간발표 대본",
+    middle_review:"중간 자료 검토",final_discussion:"최종 검증 토론",final_report:"최종보고서",final_slides:"최종발표 PPT",
+    final_script:"최종발표 대본",final_review:"최종 자료 검토",completed:"연구 완료"};
+  return names[phase] || "";
+}
+
+function renderWorkflow(state) {
+  const flow = state.workflow || {};
+  $("workflowStatus").textContent = flow.stage ? `${phaseName(flow.stage)} · 실제 BAZE 관찰 ${flow.observation_count || 0}건 · 실험 대기 ${flow.remaining_experiment_calls || 0}건` : "연구 시작 후 계획·실험·중간·최종 발표 단계가 표시됩니다.";
+  const checks = flow.daily_checks || [];
+  const latest = checks[checks.length - 1];
+  $("budgetStatus").textContent = flow.reason || (latest ? `${LABELS[latest.account]} 최근 월간 잔액 ${latest.monthly_remaining} 크레딧 · ${latest.at}` : "모델 호출 전에 담당 계정 잔액을 조회합니다.");
+  const review = state.status === "waiting_review";
+  $("reviewBox").hidden = !review;
+  if (review) $("reviewPrompt").textContent = `${phaseName(flow.stage)}: 공유 자료 탭에서 보고서·PPT·대본을 내려받아 확인하세요. 네 사람 모두 승인하거나 수정 요청을 남길 수 있습니다.`;
+  const list = $("deliverableList");
+  list.replaceChildren();
+  if (!state.deliverables?.length) { list.textContent = "아직 생성된 자료가 없습니다."; return; }
+  for (const item of state.deliverables) {
+    const link = document.createElement("a");
+    link.href = "/api/file?path=" + encodeURIComponent(item.path);
+    link.textContent = `${item.label} (${Math.ceil(item.bytes / 1024)} KB)`;
+    link.className = "deliverable-link";
+    list.append(link);
+  }
 }
 
 function makeMessage(message) {
@@ -231,7 +255,7 @@ function render(state) {
   selfActor = state.self_actor || "user";
   csrfToken = state.csrf_token || "";
   $('logoutBtn').hidden = !state.cloud;
-  const active = ["running", "paused"].includes(state.status);
+  const active = ["running", "paused", "waiting_review", "waiting_budget"].includes(state.status);
   const connected = state.connected;
   const accounts = state.accounts || {};
   const accountSignature = JSON.stringify(accounts);
@@ -249,26 +273,27 @@ function render(state) {
     $("account-" + provider).disabled = active;
     $("model-" + provider).disabled = active || !availableFor(state, $("account-" + provider).value, provider).length;
   }
-  const names = {idle:"대기 중",running:"진행 중",paused:"일시정지",stopping:"중지 중",stopped:"중지됨",completed:"완료",failed:"오류"};
+  const names = {idle:"대기 중",running:"자동 진행 중",paused:"일시정지",waiting_review:"검토 대기",waiting_budget:"잔액 보충 대기",stopping:"중지 중",stopped:"중지됨",completed:"완료",failed:"오류"};
   $("statusBadge").textContent = names[state.status] || state.status;
   $("statusBadge").className = "status-badge " + state.status;
   const connectedCount = ACCOUNTS.filter((actor) => accounts[actor]?.connected).length;
+  const keyEditable = !["running", "stopping"].includes(state.status) && !(state.activities || []).some((item) => item.status === "waiting");
   $("connectionStatus").textContent = `● BAZE ${connectedCount}/${ACCOUNTS.length} 연결`;
   $("connectionStatus").className = "connection-status" + (connected ? " ok" : "");
   for (const actor of ACCOUNTS) {
     $(actor + "Connection").textContent = accounts[actor]?.connected ?
       (state.key_storage === "persistent" ? "영구 저장됨 · 키 값은 표시되지 않습니다" : "임시 연결됨 · 서버 재시작 시 사라집니다") : "연결 전";
     $(actor + "Connection").classList.toggle("ready", !!accounts[actor]?.connected);
-    $("apiKey-" + actor).disabled = active || state.status === "stopping" || requestBusy;
+    $("apiKey-" + actor).disabled = !keyEditable || requestBusy;
   }
-  document.querySelectorAll(".connect-key").forEach((button) => button.disabled = active || state.status === "stopping" || requestBusy);
+  document.querySelectorAll(".connect-key").forEach((button) => button.disabled = !keyEditable || requestBusy);
   document.querySelectorAll(".disconnect-key").forEach((button) => button.disabled = !accounts[button.dataset.slot]?.connected || active || state.status === "stopping" || requestBusy);
   $("keyStorageStatus").textContent = state.key_storage === "persistent" ? "암호화해 외부 저장소에 보관 중 · 서버가 다시 시작되어도 자동 복원됩니다." : "임시 보관 중 · 영구 저장소 설정 전에는 서버 재시작 시 키가 사라집니다.";
   $("keyStorageStatus").classList.toggle("persistent", state.key_storage === "persistent");
   $("topicTitle").textContent = state.topic || "모델들이 역할과 연구 주제를 선정합니다";
   $("questionText").textContent = state.question || "네 모델이 먼저 역할을 협의하고 AI 분야의 주제를 선정합니다.";
   $("phaseText").textContent = phaseName(state.phase, state.round) || "준비";
-  $("turnText").textContent = `${state.messages.filter((m) => m.actor === "model").length} / ${state.rounds ? 8 + state.rounds * 4 : 0} 발언`;
+  $("turnText").textContent = `${state.activities?.length || 0}회 기록 · 필요에 따라 계속`;
   const assignment = currentAssignment();
   const countValid = new Set(PROVIDERS.map((provider) => assignment[provider])).size === ACCOUNTS.length;
   const providerValid = assignmentValid(state, assignment);
@@ -278,12 +303,13 @@ function render(state) {
   $("startBtn").disabled = !connected || active || state.status === "stopping" || !providerValid || !modelsValid;
   $("pauseBtn").disabled = state.status !== "running";
   $("resumeBtn").disabled = state.status !== "paused";
-  const swapReady = state.status === "paused" && !(state.activities || []).some((item) => item.status === "waiting");
+  $("stepBtn").disabled = state.status !== "running" && state.status !== "waiting_budget";
+  const swapReady = ["paused", "waiting_review", "waiting_budget"].includes(state.status) && !(state.activities || []).some((item) => item.status === "waiting");
   $("swapBtn").disabled = !swapReady || requestBusy;
   $("swapCurrent").textContent = `현재 모델: ${state.models?.[$("swapProvider").value] || "연구 시작 후 표시"}`;
   $("swapStatus").textContent = !state.project ? "연구 시작 후 사용할 수 있습니다." :
     state.status === "running" ? "일시정지를 누르고 현재 응답이 끝날 때까지 기다리세요." :
-    state.status === "paused" && !swapReady ? "현재 모델 응답이 끝나면 교체할 수 있습니다." :
+    ["paused", "waiting_review", "waiting_budget"].includes(state.status) && !swapReady ? "현재 모델 응답이 끝나면 교체할 수 있습니다." :
     swapReady ? "지금 교체할 수 있습니다. 다음 발언부터 적용됩니다." : "진행 중인 연구가 없습니다.";
   const history = state.model_changes || [];
   $("swapHistory").replaceChildren(...history.map((change) => {
@@ -322,6 +348,7 @@ function render(state) {
   }
   renderRoles(state.roles);
   renderActivities(state.activities || []);
+  renderWorkflow(state);
   if (state.error && state.error !== lastError) toast(state.error, true);
   lastError = state.error;
 }
@@ -380,7 +407,7 @@ document.querySelectorAll(".disconnect-key").forEach((button) => button.addEvent
 $("startBtn").addEventListener("click", async () => {
   const models = Object.fromEntries(PROVIDERS.map((provider) => [provider, $("model-" + provider).value]));
   try {
-    await post("/api/start", {rounds:Number($("rounds").value),models,assignments:currentAssignment(),step_mode:$("stepMode").checked});
+    await post("/api/start", {rounds:null,models,assignments:currentAssignment(),step_mode:false});
     toast("역할 협의를 시작했습니다.");
     openTab("chat");
     await refresh();
@@ -401,6 +428,21 @@ $("messageInput").addEventListener("keydown", (event) => {
 for (const action of ["pause","resume","stop"]) $(action + "Btn").addEventListener("click", async () => {
   try { await post("/api/" + action); await refresh(); }
   catch (error) { toast(error.message, true); }
+});
+
+$("stepBtn").addEventListener("click", async () => {
+  try { await post("/api/step"); toast("진행 가능한 연구 단계를 확인했습니다."); await refresh(); }
+  catch (error) { toast(error.message, true); }
+});
+
+for (const [id, approved] of [["approveBtn", true], ["reviseBtn", false]]) $(id).addEventListener("click", async () => {
+  const state = await (await fetch("/api/state", {cache:"no-store"})).json();
+  try {
+    await post("/api/review", {stage:state.workflow?.stage, approved, feedback:$("reviewFeedback").value});
+    $("reviewFeedback").value = "";
+    toast(approved ? "검토 승인을 기록했습니다." : "수정 요청을 기록했습니다.");
+    await refresh();
+  } catch (error) { toast(error.message, true); }
 });
 
 $("swapProvider").addEventListener("change", refresh);

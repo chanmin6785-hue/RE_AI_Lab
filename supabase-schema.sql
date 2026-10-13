@@ -30,3 +30,16 @@ alter table public.baze_lab_research_state enable row level security;
 alter table public.baze_lab_research_files enable row level security;
 revoke all on public.baze_lab_research_state, public.baze_lab_research_files from public, anon, authenticated;
 grant select, insert, update, delete on public.baze_lab_research_state, public.baze_lab_research_files to service_role;
+
+-- A database-only scheduler counter authorizes hourly work. A public health
+-- request cannot increment it, so it cannot trigger extra model spending.
+create table if not exists public.baze_lab_scheduler (
+  id text primary key check (id = 'active'),
+  tick bigint not null default 0,
+  scheduled_at timestamptz
+);
+insert into public.baze_lab_scheduler (id, tick) values ('active', 0)
+on conflict (id) do nothing;
+alter table public.baze_lab_scheduler enable row level security;
+revoke all on public.baze_lab_scheduler from public, anon, authenticated;
+grant select on public.baze_lab_scheduler to service_role;

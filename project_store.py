@@ -84,6 +84,12 @@ class SupabaseProjectStore:
                 break
         return snapshot
 
+    def scheduler_tick(self) -> int:
+        rows = self._request("baze_lab_scheduler", "GET", "?id=eq.active&select=tick")
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0].get("tick"), int):
+            raise ProjectStoreError("자동 실행 번호를 읽지 못했습니다.")
+        return rows[0]["tick"]
+
     def save(self, project: Path, snapshot: dict) -> None:
         if not project.is_dir() or Path(project.name).name != project.name:
             raise ProjectStoreError("연구 폴더가 올바르지 않습니다.")
