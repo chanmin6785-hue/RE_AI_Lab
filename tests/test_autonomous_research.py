@@ -1,4 +1,5 @@
 import json
+import copy
 from pathlib import Path
 import shutil
 import unittest
@@ -177,6 +178,38 @@ class AutonomousResearchTest(unittest.TestCase):
         self.assertTrue(any(section["key"] == "roles" for section in overview["sections"]))
         self.assertEqual(len(overview["roles"]), 4)
         self.assertIn("검토", overview["current"]["task"])
+
+    def test_restore_recreates_empty_folders_and_missing_role_file(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        self.assertEqual(self.lab.auto["stage"], "topic")
+        snapshot = copy.deepcopy(self.lab._snapshot())
+        snapshot["status"] = "waiting_budget"
+        snapshot["error"] = "[Errno 2] No such file or directory: 'research/role_selection.md'"
+        files = {path.relative_to(self.lab.project): path.read_bytes()
+                 for path in self.lab.project.rglob("*") if path.is_file()
+                 and path.name != "role_selection.md"}
+
+        class MissingRoleStore:
+            def load(self, target):
+                project = target / snapshot["project_name"]
+                for relative, content in files.items():
+                    path = project / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(content)
+                return copy.deepcopy(snapshot)
+
+            def save(self, project, state):
+                files.update({path.relative_to(project): path.read_bytes()
+                              for path in project.rglob("*") if path.is_file()})
+
+        restored = Lab(ResearchClient, self.temp / "restored", project_store=MissingRoleStore())
+        role_file = restored.project / "research" / "role_selection.md"
+        self.assertTrue(role_file.exists())
+        self.assertIn("GPT", role_file.read_text(encoding="utf-8"))
+        self.assertIn(Path("research/role_selection.md"), files)
+        self.assertEqual(restored.error, "")
+        self.assertTrue((restored.project / "presentations" / "final").is_dir())
 
 
 if __name__ == "__main__":

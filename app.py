@@ -36,6 +36,9 @@ ASSETS = ROOT / "web"
 ORDER = ("gpt", "claude", "gemini", "grok")
 ACCOUNTS = ("user", "friend", "member3", "member4")
 ACCOUNT_LABELS = {"user": "1415", "friend": "1314", "member3": "1410", "member4": "1411"}
+PROJECT_DIRS = ("research", "references", "datasets", "results", "presentations/plan",
+                "presentations/middle", "presentations/final", "data/raw/prompts",
+                "data/raw/responses", "data/processed")
 CLOUD_USERS = dict(ACCOUNT_LABELS)
 CLOUD_PASSWORD_KEYS = {"user": "BAZE_LAB_OWNER_PASSWORD", "friend": "BAZE_LAB_FRIEND_PASSWORD",
                        "member3": "BAZE_LAB_MEMBER3_PASSWORD", "member4": "BAZE_LAB_MEMBER4_PASSWORD"}
@@ -130,17 +133,36 @@ class Lab:
 
     def _restore(self, saved: dict) -> None:
         self.project = self.projects / saved["project_name"]
+        for rel in PROJECT_DIRS:
+            (self.project / rel).mkdir(parents=True, exist_ok=True)
         for field in ("status", "phase", "round_no", "current_model", "topic", "question",
                       "rounds", "step_mode", "models", "assignments", "roles", "activities",
                       "messages", "error", "turn_no", "stop_requested", "model_changes", "mode", "auto"):
             if field in saved:
                 setattr(self, field, saved[field])
         self.call_order = tuple(saved.get("call_order", ORDER))
+        repaired = False
+        role_file = self.project / "research" / "role_selection.md"
+        if not role_file.exists() and all(self.roles.get(provider) for provider in ORDER):
+            self._write_role_selection_file()
+            repaired = True
+            if "role_selection.md" in self.error and "No such file" in self.error:
+                self.error = ""
+        topic_file = self.project / "research" / "topic_selection.md"
+        if not topic_file.exists() and self.topic and self.question:
+            self._write_topic_selection_file()
+            repaired = True
+        if self.mode == "autonomous" and self.auto.get("credit_rule_version") != "zero_only":
+            self.auto["credit_rule_version"] = "zero_only"
+            self._append("system", "이전 5,000 크레딧 대기 기준은 폐지됐습니다. 이제 전체 잔액이 0보다 크면 호출을 시도합니다.")
+            repaired = True
         if self.mode == "autonomous" and self.status == "waiting_budget" and "안전 기준 5,000" in self.auto.get("reason", ""):
             # Older deployments paused with spendable credits. Recheck under the
             # user's new zero-only rule at the next scheduler wake.
             self.auto["next_due_at"] = datetime.now(timezone.utc).isoformat()
             self.auto["reason"] = "새 잔액 기준 적용: 다음 예약 실행에서 실제 전체 크레딧을 다시 확인합니다."
+            self._checkpoint()
+        elif repaired:
             self._checkpoint()
         if self.mode == "autonomous" and self.status == "running" and not any(
                 item.get("status") == "waiting" for item in self.activities):
@@ -325,8 +347,7 @@ class Lab:
             self.step_mode = bool(step_mode)
             self.projects.mkdir(parents=True, exist_ok=True)
             self.project = self.projects / (datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:6])
-            for rel in ("research", "references", "datasets", "results", "presentations/plan",
-                        "presentations/middle", "presentations/final", "data/raw/prompts", "data/raw/responses", "data/processed"):
+            for rel in PROJECT_DIRS:
                 (self.project / rel).mkdir(parents=True, exist_ok=True)
             (self.project / "datasets" / "README.md").write_text(
                 "# 데이터셋\n\n채팅 화면에서 올린 CSV·TSV·JSON·JSONL·TXT·MD가 저장됩니다. "
@@ -680,11 +701,20 @@ class Lab:
             match = MY_ROLE_RX.search(proposal)
             chosen[provider] = (match.group(1) if match else "역할 제안 없음").strip(" *`\t")[:180]
         self.roles = chosen
+        self._write_role_selection_file()
+        self._append("system", "역할 합의: " + " · ".join(f"{provider.upper()} — {chosen[provider]}" for provider in ORDER))
+
+    def _write_role_selection_file(self) -> None:
         lines = ["# 네 모델이 협의한 연구 역할", "", f"최종 배정 발언: {self.call_order[-1].upper()}", ""]
-        lines.extend(f"- {provider.upper()}: {chosen[provider]}" for provider in ORDER)
+        lines.extend(f"- {provider.upper()}: {self.roles[provider]}" for provider in ORDER)
         lines.extend(["", "전체 제안과 이견은 data/raw/conversation.jsonl을 확인하세요.", ""])
         (self.project / "research" / "role_selection.md").write_text("\n".join(lines), encoding="utf-8")
-        self._append("system", "역할 합의: " + " · ".join(f"{provider.upper()} — {chosen[provider]}" for provider in ORDER))
+
+    def _write_topic_selection_file(self) -> None:
+        (self.project / "research" / "topic_selection.md").write_text(
+            f"# 주제 선정\n\n연구 주제: {self.topic}\n\n연구 질문: {self.question}\n\n"
+            "선정 근거와 이견은 data/raw/conversation.jsonl의 주제 선정 발언을 확인하세요.\n",
+            encoding="utf-8")
 
     def _turn(self, phase: str, provider: str, round_no: int) -> bool:
         with self.condition:
@@ -742,10 +772,7 @@ class Lab:
                 question = QUESTION_RX.search(reply.text)
                 self.topic = found.group(1).strip(" *`\t")[:300] if found else "네 모델이 선정한 AI 연구 주제 (마지막 선정 발언 확인)"
                 self.question = question.group(1).strip(" *`\t")[:500] if question else "마지막 선정 발언에서 연구 질문 확인"
-                (self.project / "research" / "topic_selection.md").write_text(
-                    f"# 주제 선정\n\n연구 주제: {self.topic}\n\n연구 질문: {self.question}\n\n"
-                    "선정 근거와 이견은 data/raw/conversation.jsonl의 주제 선정 발언을 확인하세요.\n",
-                    encoding="utf-8")
+                self._write_topic_selection_file()
             if self.mode == "autonomous" and phase in ("plan_discussion", "experiment_discussion", "final_discussion"):
                 proposed, question = TOPIC_RX.search(reply.text), QUESTION_RX.search(reply.text)
                 reason = re.search(r"^TOPIC_CHANGE_REASON\s*[:：]\s*(.+)$", reply.text, re.I | re.M)
