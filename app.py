@@ -588,10 +588,14 @@ class Lab:
         recent = "\n\n".join(
             f"[{m['actor']}/{m['provider'] or '-'}] {m['content'][:3500]}"
             for m in self.messages[-24:]
-        )[-24000:]
+        )[-12000:]
         cycle = self.auto.get("cycle", 1)
-        evidence_path = self.project / "results" / f"cycle_{cycle:02d}_analysis.json"
-        evidence = evidence_path.read_text(encoding="utf-8")[:8000] if evidence_path.exists() else "아직 실제 모델 응답 실험 결과 없음"
+        evidence_files = sorted((self.project / "results").glob("cycle_*_analysis.json"))[-5:]
+        evidence = "\n".join(path.read_text(encoding="utf-8")[:2500] for path in evidence_files)[-9000:]
+        evidence = evidence or "아직 실제 모델 응답 실험 결과 없음"
+        plan_file = self.project / "presentations" / "plan" / "report.md"
+        plan = plan_file.read_text(encoding="utf-8")[:5000] if plan_file.exists() else "아직 계획서 없음"
+        reviews = json.dumps(self.auto.get("reviews", [])[-5:], ensure_ascii=False)[:2500]
         rules = (
             "전북과학고 공개 교육과정의 과제연구 계획서 발표→중간발표→최종발표 순서를 따른다. "
             "한국어로 쓰고 AI 연구 주제를 네 모델이 스스로 정한다. 주제 변경은 이유와 이전 결과의 영향까지 밝힌다. "
@@ -621,9 +625,10 @@ class Lab:
                 f"연구 주제: {self.topic or '선정 중'}\n연구 질문: {self.question or '선정 중'}\n"
                 f"단계: {phase}; 실험 주기: {cycle}; 발언 순서: {' → '.join(self.call_order)}\n"
                 f"공통 원칙: {rules}\n이번 작업: {tasks[phase]}\n"
+                f"검토 기록: {reviews}\n계획서 발췌: {plan}\n"
                 f"실험 분석 자료: {evidence}\n"
-                f"사용자/연구 자료: {self._materials() or '(없음)'}\n"
-                f"최근 대화: {recent or '(첫 발언)'}")
+                f"사용자/연구 자료 발췌: {(self._materials() or '(없음)')[:6000]}\n"
+                f"최근 대화 발췌(전체 기록은 저장소에 보관되며 이 호출에는 일부만 제공): {recent or '(첫 발언)'}")
 
     def _activity_event(self, item: dict) -> None:
         with (self.project / "data" / "processed" / "activity.jsonl").open("a", encoding="utf-8") as fh:
