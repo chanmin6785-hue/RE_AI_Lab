@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from baze_models import BazeClient, BazeError, DEFAULT_MODELS
 from key_store import KeyStoreError, store_from_environment
 from project_store import ProjectStoreError, SupabaseProjectStore
+from research_overview import build_overview
 from research_workflow import REVIEW_STAGES, decision, extract_cases, observed_analysis, write_presentation, write_report
 
 
@@ -129,6 +130,12 @@ class Lab:
             if field in saved:
                 setattr(self, field, saved[field])
         self.call_order = tuple(saved.get("call_order", ORDER))
+        if self.mode == "autonomous" and self.status == "waiting_budget" and "안전 기준 5,000" in self.auto.get("reason", ""):
+            # Older deployments paused with spendable credits. Recheck under the
+            # user's new zero-only rule at the next scheduler wake.
+            self.auto["next_due_at"] = datetime.now(timezone.utc).isoformat()
+            self.auto["reason"] = "새 잔액 기준 적용: 다음 예약 실행에서 실제 전체 크레딧을 다시 확인합니다."
+            self._checkpoint()
         if self.mode == "autonomous" and self.status == "running" and not any(
                 item.get("status") == "waiting" for item in self.activities):
             # The next scheduled wake continues from the last committed turn.
@@ -242,6 +249,15 @@ class Lab:
                                "observation_count": len(self.auto.get("observations", []))},
                 "deliverables": self.deliverables(),
             }
+
+    def research_overview(self) -> dict:
+        with self.lock:
+            transcript = self.project / "data" / "raw" / "conversation.jsonl" if self.project else None
+            return build_overview(
+                transcript, topic=self.topic, question=self.question, roles=self.roles,
+                models=self.models, assignments=self.assignments, call_order=self.call_order,
+                status=self.status, stage=self.auto.get("stage", ""), current_model=self.current_model,
+                auto=self.auto, activities=self.activities)
 
     def _write_manifest(self) -> None:
         if not self.project:
@@ -677,6 +693,7 @@ class Lab:
             self.phase, self.round_no, self.current_model = phase, round_no, provider
             prompt = self._prompt(phase, provider, round_no)
             turn_no = self.turn_no + 1
+            self.turn_no = turn_no  # Even a rejected paid call keeps a unique audit number.
             model = self.models[provider]
             account = self.assignments[provider]
             client = self.clients[account]
@@ -779,16 +796,18 @@ class Lab:
             self.auto["daily_checks"] = (self.auto.get("daily_checks", []) + [{
                 "at": now(), "account": actor, "monthly_remaining": monthly, "total_remaining": total
             }])[-60:]
-            reason = "" if monthly >= 5000 and total >= 5000 else (
-                f"{ACCOUNT_LABELS[actor]}의 월간/전체 크레딧 잔액이 안전 기준 5,000 미만입니다. "
+            reason = "" if total > 0 else (
+                f"{ACCOUNT_LABELS[actor]}의 전체 크레딧 잔액이 0입니다. "
                 "다음 한국 시간 자정 후 실제 잔액을 다시 확인합니다.")
         except Exception as exc:
             reason = f"{ACCOUNT_LABELS[actor]} 크레딧 잔액 조회 실패: {self._safe_error(exc)}"
         if not reason:
+            self.auto["reason"] = ""
+            self.auto["next_due_at"] = ""
             return True
         kst = datetime.now(ZoneInfo("Asia/Seoul"))
         next_midnight = (kst + timedelta(days=1)).replace(hour=0, minute=10, second=0, microsecond=0)
-        self.auto["next_due_at"] = (next_midnight if "안전 기준" in reason else kst + timedelta(hours=1)).isoformat()
+        self.auto["next_due_at"] = (next_midnight if "전체 크레딧 잔액이 0" in reason else kst + timedelta(hours=1)).isoformat()
         self.auto["reason"] = reason
         self._append("system", reason)
         self._auto_stage(self.auto["stage"], status="waiting_budget")
@@ -975,9 +994,20 @@ class Lab:
         except Exception as exc:
             with self.lock:
                 self.error = self._safe_error(exc)
-                self.status = "paused"
-                self.auto["reason"] = "자동 실행 오류. 활동 기록을 확인한 뒤 재개하세요."
-                self._append("system", f"자동 연구가 일시정지되었습니다: {self.error}")
+                depleted = isinstance(exc, BazeError) and bool(re.search(
+                    r"HTTP 402|insufficient[_ ]credits?|not enough credits?|크레딧(?:이|가)? 부족|잔액 부족",
+                    self.error, re.I))
+                if depleted:
+                    kst = datetime.now(ZoneInfo("Asia/Seoul"))
+                    self.auto["next_due_at"] = (kst + timedelta(days=1)).replace(
+                        hour=0, minute=10, second=0, microsecond=0).isoformat()
+                    self.status = "waiting_budget"
+                    self.auto["reason"] = "BAZE가 잔액 부족으로 호출을 거절했습니다. 다음 한국 시간 자정 후 잔액을 다시 확인합니다."
+                    self._append("system", self.auto["reason"])
+                else:
+                    self.status = "paused"
+                    self.auto["reason"] = "자동 실행 오류. 활동 기록을 확인한 뒤 재개하세요."
+                    self._append("system", f"자동 연구가 일시정지되었습니다: {self.error}")
                 self._write_manifest()
                 self._checkpoint()
         finally:
@@ -1102,6 +1132,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/state":
             self._json(200, self._state())
+            return
+        if self.path == "/api/overview":
+            self._json(200, self.lab.research_overview())
             return
         if self.path.startswith("/api/turn/"):
             try:

@@ -13,6 +13,10 @@ let requestBusy = false;
 let lastError = "";
 let selfActor = "user";
 let csrfToken = "";
+let latestState = null;
+let overviewSignature = "";
+let overviewBusy = false;
+let overviewLastAttempt = 0;
 
 $('logoutBtn').addEventListener('click', async () => {
   const response = await fetch('/logout', {method:'POST',headers:{'X-RE-Lab-CSRF':csrfToken}});
@@ -21,13 +25,14 @@ $('logoutBtn').addEventListener('click', async () => {
 });
 
 function openTab(name) {
-  for (const section of ["chat", "activity", "files", "settings"]) $(section + "Panel").hidden = section !== name;
+  for (const section of ["chat", "overview", "activity", "files", "settings"]) $(section + "Panel").hidden = section !== name;
   document.querySelectorAll(".tab").forEach((tab) => {
     const active = tab.dataset.tab === name;
     tab.classList.toggle("active", active);
     if (active) tab.setAttribute("aria-current", "page");
     else tab.removeAttribute("aria-current");
   });
+  if (name === "overview") void refreshOverview(true);
 }
 document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => openTab(tab.dataset.tab)));
 document.querySelectorAll("[data-open]").forEach((button) => button.addEventListener("click", () => openTab(button.dataset.open)));
@@ -128,6 +133,106 @@ function phaseName(phase, round) {
     final_script:"최종발표 대본",final_review:"최종 자료 검토",completed:"연구 완료"};
   return names[phase] || "";
 }
+
+function overviewElement(tag, content, className = "") {
+  const element = document.createElement(tag);
+  element.textContent = content;
+  if (className) element.className = className;
+  return element;
+}
+
+function overviewTime(value) {
+  if (!value) return "";
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? value : time.toLocaleString("ko-KR", {timeZone:"Asia/Seoul", dateStyle:"medium", timeStyle:"short"});
+}
+
+function overviewList(target, items, empty) {
+  target.replaceChildren();
+  if (!items.length) { target.append(overviewElement("p", empty, "overview-empty")); return; }
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "overview-event";
+    row.append(overviewElement("span", [item.actor ? LABELS[item.actor] || item.actor : "연구실", overviewTime(item.at)].filter(Boolean).join(" · "), "overview-event-meta"));
+    row.append(overviewElement("p", item.text));
+    target.append(row);
+  }
+}
+
+function renderOverview(data) {
+  const counts = data.counts || {};
+  const topic = data.topic || "연구 주제 선정 전";
+  const question = data.question ? ` 연구 질문은 ‘${data.question}’입니다.` : "";
+  const discussion = (data.sections || []).map((section) => `${section.title} ${section.count}건`).join(" · ");
+  $("overviewSummary").textContent = `연구 주제: ${topic}.${question} 현재 ${phaseName(data.current?.stage) || "준비"} 단계입니다. 저장된 전체 대화 ${counts.all || 0}건 중 AI 발언 ${counts.models || 0}건과 참여자 발언 ${counts.people || 0}건을 확인했습니다.${discussion ? ` 단계별 AI 발언: ${discussion}.` : ""}`;
+  const stats = $("overviewStats");
+  stats.replaceChildren();
+  for (const [value, label] of [[counts.models || 0,"AI 발언"],[counts.people || 0,"참여자 발언"],[data.call_count || 0,"API 호출"],[data.current?.observation_count || 0,"실제 실험 응답"]]) {
+    const box = document.createElement("div");
+    box.append(overviewElement("strong", String(value)), overviewElement("span", label));
+    stats.append(box);
+  }
+  $("overviewCoverage").textContent = data.first_at ? `전체 저장 대화 기준 · ${overviewTime(data.first_at)}부터 ${overviewTime(data.last_at)}까지` : "아직 저장된 대화가 없습니다.";
+  const current = data.current || {};
+  $("overviewStage").textContent = `${phaseName(current.stage) || "준비"} · ${({running:"자동 진행 중",waiting_budget:"크레딧 보충 대기",waiting_review:"참여자 검토 대기",paused:"일시정지",completed:"완료",stopped:"중지",failed:"오류",idle:"대기"})[current.status] || current.status || "대기"}`;
+  const next = current.provider ? ` ${LABELS[current.provider]}${current.status === "running" ? "가 담당합니다." : " 차례입니다."}` : "";
+  $("overviewTask").textContent = (current.task || "") + next;
+  $("overviewReason").textContent = [current.reason, current.status === "waiting_budget" && current.next_due_at ? `다음 잔액 확인: ${overviewTime(current.next_due_at)}` : ""].filter(Boolean).join(" · ");
+  const roles = $("overviewRoles");
+  roles.replaceChildren();
+  for (const role of data.roles || []) {
+    const card = document.createElement("article");
+    card.className = `overview-role ${role.provider}`;
+    const heading = document.createElement("div");
+    heading.append(overviewElement("strong", LABELS[role.provider] || role.provider), overviewElement("span", role.state, "overview-role-state"));
+    card.append(heading, overviewElement("p", role.role), overviewElement("small", [role.model || "모델 미선택", role.account ? `${role.account} 계정` : "담당 계정 미정"].join(" · ")));
+    roles.append(card);
+  }
+  const sections = $("overviewSections");
+  sections.replaceChildren();
+  if (!data.sections?.length) sections.append(overviewElement("p", "아직 모델 대화가 없습니다.", "overview-empty"));
+  for (const section of data.sections || []) {
+    const card = document.createElement("article");
+    card.className = "overview-section";
+    card.append(overviewElement("h3", `${section.title} · AI 발언 ${section.count}건`));
+    if (!section.highlights?.length) card.append(overviewElement("p", "실제 실험 응답은 활동 기록에서 사례별로 확인할 수 있습니다.", "overview-empty"));
+    for (const highlight of section.highlights || []) {
+      const row = document.createElement("p");
+      row.append(overviewElement("strong", `${LABELS[highlight.provider] || highlight.provider} · `), document.createTextNode(highlight.text));
+      card.append(row);
+    }
+    sections.append(card);
+  }
+  overviewList($("overviewMilestones"), data.milestones || [], "아직 기록된 진행 결정이 없습니다.");
+  overviewList($("overviewHuman"), data.human_input || [], "아직 참여자 의견이 없습니다.");
+  const reviews = data.reviews || [];
+  if (reviews.length) $("overviewHuman").prepend(overviewElement("p", `검토 기록 ${reviews.length}건 · 승인 ${reviews.filter((review) => review.approved).length}건 · 수정 요청 ${reviews.filter((review) => !review.approved).length}건`, "overview-review-count"));
+}
+
+function overviewKey(state) {
+  const activities = state.activities || [];
+  const last = activities[activities.length - 1];
+  return JSON.stringify([state.project,state.status,state.phase,state.current_model,state.topic,state.question,
+    state.workflow?.stage,state.workflow?.reason,state.workflow?.next_due_at,state.workflow?.reviews?.length,
+    activities.length,last?.status,state.messages?.at(-1)?.id,state.roles]);
+}
+
+async function refreshOverview(force = false) {
+  if ($("overviewPanel").hidden || !latestState || overviewBusy) return;
+  const signature = overviewKey(latestState);
+  if (!force && (signature === overviewSignature || Date.now() - overviewLastAttempt < 15000)) return;
+  overviewBusy = true;
+  overviewLastAttempt = Date.now();
+  try {
+    const response = await fetch("/api/overview", {cache:"no-store"});
+    if (!response.ok) throw new Error("연구 요약을 읽지 못했습니다.");
+    renderOverview(await response.json());
+    overviewSignature = signature;
+  } catch (error) { $("overviewSummary").textContent = error.message; }
+  finally { overviewBusy = false; }
+}
+
+$("overviewRefreshBtn").addEventListener("click", () => refreshOverview(true));
 
 function renderWorkflow(state) {
   const flow = state.workflow || {};
@@ -252,6 +357,7 @@ function renderActivities(activities) {
 }
 
 function render(state) {
+  latestState = state;
   selfActor = state.self_actor || "user";
   csrfToken = state.csrf_token || "";
   $('logoutBtn').hidden = !state.cloud;
@@ -349,6 +455,7 @@ function render(state) {
   renderRoles(state.roles);
   renderActivities(state.activities || []);
   renderWorkflow(state);
+  void refreshOverview();
   if (state.error && state.error !== lastError) toast(state.error, true);
   lastError = state.error;
 }

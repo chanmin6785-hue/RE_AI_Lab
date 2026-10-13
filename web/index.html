@@ -12,6 +12,7 @@
       <div class="room-identity"><div class="room-mark">✦</div><div><strong>AI R&E Lab</strong><span>GPT · Claude · Gemini · Grok과 함께하는 연구실</span></div></div>
       <nav class="tabs" aria-label="연구실 화면">
         <button class="tab active" data-tab="chat" aria-current="page">메시지</button>
+        <button class="tab" data-tab="overview">연구 현황</button>
         <button class="tab" data-tab="activity">활동 기록</button>
         <button class="tab" data-tab="files">공유 자료</button>
         <button class="tab" data-tab="settings">연구 설정</button>
@@ -26,6 +27,18 @@
         <section id="workflowCard" class="workflow-card"><strong>R&E 진행 단계</strong><p id="workflowStatus">연구 시작 후 계획·실험·중간·최종 발표 단계가 표시됩니다.</p><p id="budgetStatus"></p><div id="reviewBox" hidden><p id="reviewPrompt"></p><textarea id="reviewFeedback" rows="3" placeholder="승인 의견 또는 수정 요청을 입력하세요"></textarea><div class="card-actions"><button id="approveBtn" class="primary">검토 후 승인</button><button id="reviseBtn" class="secondary">수정 요청</button></div></div></section>
         <section id="timeline" class="timeline" aria-live="polite"><div class="empty-state"><span>✦</span><h1>연구 대화를 시작해 보세요</h1><p>연구 설정에서 BAZE에 연결하면 네 모델이 주제를 정하고 차례로 토론합니다. 이곳에서 대화를 지켜보며 직접 의견을 보낼 수 있습니다.</p><button class="text-action" data-open="settings">연구 설정 열기 →</button></div></section>
         <div class="composer-area"><form id="messageForm" class="composer"><textarea id="messageInput" rows="1" placeholder="메시지를 입력하세요…" disabled></textarea><button id="sendBtn" type="submit" aria-label="메시지 보내기" disabled>➤</button></form><div class="composer-help">Enter로 보내기 · Shift+Enter로 줄바꿈 · 다음 모델 발언부터 반영됩니다</div></div>
+      </div>
+    </main>
+
+    <main id="overviewPanel" class="page-panel" hidden>
+      <div class="page-content overview-content">
+        <div class="page-intro"><span class="eyebrow">RESEARCH OVERVIEW</span><h1>연구 현황</h1><p>저장된 전체 대화에서 단계별 핵심 발언을 발췌하고, 현재 작업과 담당 역할을 함께 보여 줍니다.</p></div>
+        <section class="card overview-hero"><div class="overview-heading"><div><span class="eyebrow">지금까지의 대화</span><h2>누적 요약</h2></div><button id="overviewRefreshBtn" class="secondary" type="button">새로고침</button></div><p id="overviewSummary">연구 기록을 읽는 중입니다.</p><div id="overviewStats" class="overview-stats"></div><p id="overviewCoverage" class="overview-note"></p></section>
+        <section class="card overview-current"><span class="eyebrow">NOW</span><h2>현재 하고 있는 일</h2><strong id="overviewStage">연구 상태 확인 중</strong><p id="overviewTask"></p><p id="overviewReason"></p></section>
+        <section class="card overview-roles"><span class="eyebrow">TEAM</span><h2>네 AI의 역할과 담당 작업</h2><div id="overviewRoles" class="overview-role-grid"></div></section>
+        <section class="card overview-discussion"><span class="eyebrow">CONVERSATION</span><h2>단계별 대화 요약</h2><p class="overview-note">모델의 실제 발언에서 핵심 문장을 발췌합니다. 표시된 문장은 새로 생성한 결론이 아닙니다.</p><div id="overviewSections"></div></section>
+        <div class="overview-bottom"><section class="card"><h2>주요 진행 기록</h2><div id="overviewMilestones"></div></section><section class="card"><h2>참여자 의견·검토</h2><div id="overviewHuman"></div></section></div>
+        <p class="page-note">원문과 원형 API 응답은 활동 기록에서, 전체 대화·자료는 공유 자료의 ZIP에서 확인할 수 있습니다.</p>
       </div>
     </main>
 
@@ -56,7 +69,7 @@
           <div class="key-slot"><label for="apiKey-member3">1410</label><input id="apiKey-member3" type="password" autocomplete="off" placeholder="1410의 BAZE API 키"><button class="secondary connect-key" data-slot="member3">저장</button><button class="disconnect-button disconnect-key" data-slot="member3">해제</button><span id="member3Connection">연결 전</span></div>
           <div class="key-slot"><label for="apiKey-member4">1411</label><input id="apiKey-member4" type="password" autocomplete="off" placeholder="1411의 BAZE API 키"><button class="secondary connect-key" data-slot="member4">저장</button><button class="disconnect-button disconnect-key" data-slot="member4">해제</button><span id="member4Connection">연결 전</span></div>
           <p id="keyStorageStatus" class="key-storage-status">저장소 상태 확인 중</p></section>
-        <section class="card settings-card"><div class="card-icon">✦</div><h2>자율 R&E 시작</h2><p>네 모델이 역할과 주제를 선정하고, 필요한 만큼 토론·실험합니다. 계획서·계획발표, 중간발표, 최종보고서·최종발표마다 네 사람이 자료를 검토하고 승인합니다. BAZE 잔액이 5,000 크레딧 미만이면 다음 한국 시간 자정 후 실제 잔액을 다시 확인합니다.</p>
+        <section class="card settings-card"><div class="card-icon">✦</div><h2>자율 R&E 시작</h2><p>네 모델이 역할과 주제를 선정하고, 필요한 만큼 토론·실험합니다. 계획서·계획발표, 중간발표, 최종보고서·최종발표마다 네 사람이 자료를 검토하고 승인합니다. 담당 계정의 전체 BAZE 크레딧이 0이 되면 다음 한국 시간 자정 후 실제 잔액을 다시 확인합니다.</p>
           <div class="model-grid"><strong>모델</strong><strong>담당 계정</strong><strong>사용할 모델 ID</strong>
             <label for="account-gpt">GPT</label><select id="account-gpt"><option value="user">1415</option><option value="friend">1314</option><option value="member3">1410</option><option value="member4">1411</option></select><select id="model-gpt" disabled><option>연결 후 선택</option></select>
             <label for="account-claude">Claude</label><select id="account-claude"><option value="user">1415</option><option value="friend">1314</option><option value="member3">1410</option><option value="member4">1411</option></select><select id="model-claude" disabled><option>연결 후 선택</option></select>

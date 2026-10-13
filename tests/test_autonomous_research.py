@@ -9,12 +9,13 @@ from pptx import Presentation
 from docx import Document
 
 from app import Lab
-from baze_models import Reply
+from baze_models import BazeError, Reply
 
 
 class ResearchClient:
     calls = []
     balance = 8000
+    monthly_balance = None
 
     def __init__(self, key, timeout):
         self.api_key = key
@@ -24,7 +25,9 @@ class ResearchClient:
 
     def credits(self):
         amount = type(self).balance
-        return {"monthly_allocated": {"remaining": amount}, "total": {"remaining": amount}}
+        monthly = type(self).monthly_balance
+        return {"monthly_allocated": {"remaining": amount if monthly is None else monthly},
+                "total": {"remaining": amount}}
 
     def ask(self, provider, prompt, model, max_tokens):
         type(self).calls.append((provider, prompt, model))
@@ -58,6 +61,7 @@ class AutonomousResearchTest(unittest.TestCase):
         self.temp.mkdir()
         ResearchClient.calls = []
         ResearchClient.balance = 8000
+        ResearchClient.monthly_balance = None
         self.lab = Lab(ResearchClient, self.temp)
         for actor in ("user", "friend", "member3", "member4"):
             self.lab.connect("KEY_" + actor, actor=actor)
@@ -112,7 +116,7 @@ class AutonomousResearchTest(unittest.TestCase):
                          ["plan_review", "plan_review", "middle_review", "final_review"])
 
     def test_low_credit_waits_without_paid_call(self):
-        ResearchClient.balance = 4999
+        ResearchClient.balance = 0
         self.lab.start(None, self.models, self.assignments)
         self.lab.worker.join(5)
         self.assertEqual(self.lab.status, "waiting_budget")
@@ -126,6 +130,45 @@ class AutonomousResearchTest(unittest.TestCase):
         self.lab.auto_wake()
         self.lab.worker.join(5)
         self.assertGreater(len(ResearchClient.calls), 0)
+
+    def test_positive_total_credit_allows_calls_even_when_monthly_is_zero(self):
+        ResearchClient.balance = 1
+        ResearchClient.monthly_balance = 0
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        self.assertGreater(len(ResearchClient.calls), 0)
+        self.assertNotEqual(self.lab.status, "waiting_budget")
+
+    def test_gateway_credit_rejection_waits_then_retries_with_new_audit_number(self):
+        ResearchClient.balance = 1
+        for client in self.lab.clients.values():
+            client.ask = lambda *args, **kwargs: (_ for _ in ()).throw(BazeError("HTTP 402: insufficient credits"))
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        self.assertEqual(self.lab.status, "waiting_budget")
+        self.assertEqual(self.lab.activities[-1]["status"], "failed")
+        failed_turn = self.lab.activities[-1]["turn"]
+        for client in self.lab.clients.values():
+            del client.ask
+        self.lab.auto["next_due_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        self.lab.auto["last_wake_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.lab.auto_wake()
+        self.lab.worker.join(5)
+        self.assertGreater(len(ResearchClient.calls), 0)
+        self.assertGreater(self.lab.activities[-1]["turn"], failed_turn)
+
+    def test_overview_reads_complete_archived_dialogue(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.advance_until("waiting_review")
+        with self.lab.lock:
+            for number in range(205):
+                self.lab._append("system", f"기록 확인 {number}")
+        overview = self.lab.research_overview()
+        self.assertGreater(overview["counts"]["all"], len(self.lab.messages))
+        self.assertEqual(overview["counts"]["models"], len(ResearchClient.calls))
+        self.assertTrue(any(section["key"] == "roles" for section in overview["sections"]))
+        self.assertEqual(len(overview["roles"]), 4)
+        self.assertIn("검토", overview["current"]["task"])
 
 
 if __name__ == "__main__":
