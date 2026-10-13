@@ -120,6 +120,18 @@ class BazeTests(unittest.TestCase):
         self.assertEqual(fake.body(1)["messages"][1]["content"][0]["signature"], "signature-claude")
         self.assertEqual(len(fake.body(1)["messages"]), 3)
 
+    def test_claude_thinking_exhausts_output_budget_without_text(self):
+        exhausted = {"model": "claude-test", "stop_reason": "max_tokens",
+                     "content": [{"type": "thinking", "thinking": "partial", "signature": "signed"}],
+                     "usage": {"output_tokens": 3000}}
+        client, fake = self.client(exhausted)
+        chat = client.chat("claude", max_tokens=3000)
+        with self.assertRaises(bm.BazeOutputLimitError) as raised:
+            chat.ask("연구 계획을 검토하세요")
+        self.assertEqual(raised.exception.raw, exhausted)
+        self.assertEqual(chat._history, [])
+        self.assertEqual(fake.body()["max_tokens"], 3000)
+
     def test_gemini_preserves_signature_hides_thought_and_reset(self):
         client, fake = self.client(gemini_reply(), gemini_reply(), gemini_reply())
         chat = client.chat("gemini", system="시스템")

@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
@@ -21,7 +22,7 @@ from zipfile import ZipFile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import Lab, ViewerHandler, CloudHandler, ACCOUNT_LABELS, CLOUD_USERS
 from key_store import KeyStoreError
-from baze_models import Reply
+from baze_models import BazeOutputLimitError, Reply
 
 
 class FakeControl:
@@ -204,6 +205,31 @@ class LabTest(unittest.TestCase):
         self.lab.resume()
         self.wait_done()
         self.assertEqual(self.lab.public_state()["status"], "completed", self.lab.public_state()["error"])
+
+    def test_empty_claude_output_retries_once_and_keeps_first_response(self):
+        original_ask = FakeClient.ask
+        claude_limits = []
+        exhausted = {"model": "claude-test", "stop_reason": "max_tokens",
+                     "content": [{"type": "thinking", "thinking": "partial", "signature": "signed"}],
+                     "usage": {"output_tokens": 16000}}
+
+        def ask(client, provider, prompt, model, max_tokens):
+            if provider == "claude":
+                claude_limits.append(max_tokens)
+                if len(claude_limits) == 1:
+                    raise BazeOutputLimitError("no visible text", exhausted)
+            return original_ask(client, provider, prompt, model, max_tokens)
+
+        self.control.release.set()
+        with patch.object(FakeClient, "ask", ask):
+            self.lab.start(1, self.models, self.assignments)
+            self.wait_done()
+        self.assertEqual(self.lab.public_state()["status"], "completed", self.lab.error)
+        self.assertEqual(claude_limits[:2], [16000, 32000])
+        retried = next(item for item in self.lab.activities if item.get("output_limit_retry"))
+        self.assertEqual(retried["status"], "completed")
+        first = self.lab.project / retried["output_limit_retry"]["first_response_file"]
+        self.assertEqual(json.loads(first.read_text(encoding="utf-8")), exhausted)
 
     def test_model_swap_preserves_earlier_model_and_changes_later_turns(self):
         self.lab.start(1, self.models, self.assignments, step_mode=True)

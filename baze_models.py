@@ -42,6 +42,14 @@ class BazeError(RuntimeError):
     """인증, 통신, API 오류 또는 답변을 얻지 못한 경우."""
 
 
+class BazeOutputLimitError(BazeError):
+    """Claude used its output allowance before producing any visible text."""
+
+    def __init__(self, message: str, raw: dict[str, Any]):
+        super().__init__(message)
+        self.raw = raw
+
+
 def _make_ssl_context() -> tuple[ssl.SSLContext, str]:
     """인증서 및 호스트 이름 검증을 유지하며 OS 인증서 저장소를 활용합니다."""
     try:
@@ -272,8 +280,10 @@ class BazeChat:
             details = {key: raw[key] for key in ("status", "stop_reason", "incomplete_details", "promptFeedback") if key in raw}
             if provider == "gemini":
                 details["finishReason"] = candidate.get("finishReason")
-            raise BazeError("텍스트 답변이 없습니다. 토큰 한도·모델 지원·필터 결과를 확인하세요. "
-                            + self.client._redact(details))
+            message = "텍스트 답변이 없습니다. 토큰 한도·모델 지원·필터 결과를 확인하세요. " + self.client._redact(details)
+            if provider == "claude" and raw.get("stop_reason") == "max_tokens":
+                raise BazeOutputLimitError(message, raw)
+            raise BazeError(message)
         # HTTP/API/파싱 오류나 빈 응답은 대화 기록에 추가하지 않습니다.
         if provider == "gpt":
             self._previous_response_id = raw["id"]

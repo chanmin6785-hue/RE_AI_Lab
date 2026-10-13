@@ -23,7 +23,7 @@ from uuid import uuid4
 from zipfile import ZipFile, ZIP_DEFLATED
 from zoneinfo import ZoneInfo
 
-from baze_models import BazeClient, BazeError, DEFAULT_MODELS
+from baze_models import BazeClient, BazeError, BazeOutputLimitError, DEFAULT_MODELS
 from key_store import KeyStoreError, store_from_environment
 from project_store import ProjectStoreError, SupabaseProjectStore
 from research_overview import build_overview
@@ -407,12 +407,20 @@ class Lab:
         with self.condition:
             if self.status != "paused":
                 raise ValueError("일시정지된 연구가 없습니다.")
+            previous_error = self.error
+            previous_reason = self.auto.get("reason", "")
             self.status = "running"
+            self.error = ""
+            if self.mode == "autonomous":
+                self.auto["reason"] = ""
             self._write_manifest()
             try:
                 self._checkpoint()
             except Exception:
                 self.status = "paused"
+                self.error = previous_error
+                if self.mode == "autonomous":
+                    self.auto["reason"] = previous_reason
                 self._write_manifest()
                 raise
             if self.worker is None or not self.worker.is_alive():
@@ -741,8 +749,28 @@ class Lab:
             self._checkpoint()
         started = time.monotonic()
         try:
-            max_tokens = 16000 if self.mode == "legacy" else (4500 if phase.endswith("report") else 3000)
-            reply = client.ask(provider, prompt, model=model, max_tokens=max_tokens)
+            max_tokens = (16000 if self.mode == "legacy" or provider == "claude"
+                          else (4500 if phase.endswith("report") else 3000))
+            try:
+                reply = client.ask(provider, prompt, model=model, max_tokens=max_tokens)
+            except BazeOutputLimitError as limit_error:
+                retry_tokens = min(max_tokens * 2, 32000)
+                if retry_tokens <= max_tokens:
+                    raise
+                with self.condition:
+                    # Keep the first, billable response in the research audit trail.
+                    retry_file = (self.project / "data" / "raw" / "responses" /
+                                  f"turn_{turn_no:02d}_{provider}_attempt_1.json")
+                    first_raw = json.loads(self._redact_keys(json.dumps(limit_error.raw, ensure_ascii=False)))
+                    atomic_json(retry_file, first_raw)
+                    item["output_limit_retry"] = {"first_max_tokens": max_tokens,
+                                                   "retry_max_tokens": retry_tokens,
+                                                   "first_response_file": str(retry_file.relative_to(self.project)),
+                                                   "first_usage": limit_error.raw.get("usage") or {}}
+                    self._append("system", f"{model}의 출력 한도 {max_tokens:,}토큰이 답변 전에 소진됐습니다. 첫 응답을 보관하고 한도 {retry_tokens:,}토큰으로 한 번 재시도합니다. 재시도에도 크레딧이 사용될 수 있습니다.")
+                    self._activity_event(item)
+                    self._checkpoint()
+                reply = client.ask(provider, prompt, model=model, max_tokens=retry_tokens)
         except Exception as exc:
             with self.condition:
                 item.update(status="failed", finished_at=now(), error=self._safe_error(exc))
