@@ -4,7 +4,7 @@ services:
     name: ai-re-lab-chanmin6785
     runtime: docker
     plan: free
-    autoDeployTrigger: 'off'
+    autoDeployTrigger: 'commit'
     healthCheckPath: /healthz
     envVars:
       - key: BAZE_LAB_OWNER_PASSWORD
