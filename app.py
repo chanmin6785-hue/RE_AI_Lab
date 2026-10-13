@@ -159,7 +159,8 @@ class Lab:
         last_activity = self.activities[-1] if self.activities else {}
         if (self.mode == "autonomous" and self.status == "paused"
                 and self.auto.get("claude_output_recovery_version") != 1
-                and "텍스트 답변이 없습니다." in self.error and "max_tokens" in self.error
+                and "텍스트 답변이 없습니다." in str(last_activity.get("error", ""))
+                and "max_tokens" in str(last_activity.get("error", ""))
                 and last_activity.get("provider") == "claude"
                 and last_activity.get("status") == "failed"):
             # Recover this known output-limit failure once after deploying the larger cap.

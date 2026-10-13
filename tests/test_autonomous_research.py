@@ -224,6 +224,7 @@ class AutonomousResearchTest(unittest.TestCase):
         snapshot["activities"].append({"turn": snapshot["turn_no"],
                                        "phase": "plan_discussion", "provider": "claude",
                                        "status": "failed", "error": snapshot["error"]})
+        snapshot["error"] = "서버가 재시작되었습니다. 기록을 복원했습니다. 재개 전에 마지막 호출을 확인하세요."
 
         class RecoveryStore:
             def __init__(self, state):
