@@ -211,6 +211,42 @@ class AutonomousResearchTest(unittest.TestCase):
         self.assertEqual(restored.error, "")
         self.assertTrue((restored.project / "presentations" / "final").is_dir())
 
+    def test_restore_recovers_claude_output_limit_once(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        snapshot = copy.deepcopy(self.lab._snapshot())
+        snapshot["status"] = "paused"
+        snapshot["error"] = ('텍스트 답변이 없습니다. 토큰 한도·모델 지원·필터 결과를 확인하세요. '
+                             '{"stop_reason": "max_tokens"}')
+        snapshot["auto"]["stage"] = "plan_discussion"
+        snapshot["auto"]["credit_rule_version"] = "zero_only"
+        snapshot["turn_no"] += 1
+        snapshot["activities"].append({"turn": snapshot["turn_no"],
+                                       "phase": "plan_discussion", "provider": "claude",
+                                       "status": "failed", "error": snapshot["error"]})
+
+        class RecoveryStore:
+            def __init__(self, state):
+                self.state = copy.deepcopy(state)
+
+            def load(self, _target):
+                return copy.deepcopy(self.state)
+
+            def save(self, _project, state):
+                self.state = copy.deepcopy(state)
+
+        store = RecoveryStore(snapshot)
+        restored = Lab(ResearchClient, self.temp / "recovered", project_store=store)
+        self.assertEqual(restored.status, "running")
+        self.assertEqual(restored.error, "")
+        self.assertEqual(restored.auto["claude_output_recovery_version"], 1)
+        self.assertEqual(store.state["status"], "running")
+        note = "Claude의 출력 한도 오류를 수정했습니다."
+        self.assertEqual(sum(note in item["content"] for item in restored.messages), 1)
+        restored_again = Lab(ResearchClient, self.temp / "recovered-again", project_store=store)
+        self.assertEqual(restored_again.status, "running")
+        self.assertEqual(sum(note in item["content"] for item in restored_again.messages), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

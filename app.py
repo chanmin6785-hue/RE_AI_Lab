@@ -156,6 +156,19 @@ class Lab:
             self.auto["credit_rule_version"] = "zero_only"
             self._append("system", "이전 5,000 크레딧 대기 기준은 폐지됐습니다. 이제 전체 잔액이 0보다 크면 호출을 시도합니다.")
             repaired = True
+        last_activity = self.activities[-1] if self.activities else {}
+        if (self.mode == "autonomous" and self.status == "paused"
+                and self.auto.get("claude_output_recovery_version") != 1
+                and "텍스트 답변이 없습니다." in self.error and "max_tokens" in self.error
+                and last_activity.get("provider") == "claude"
+                and last_activity.get("status") == "failed"):
+            # Recover this known output-limit failure once after deploying the larger cap.
+            self.auto["claude_output_recovery_version"] = 1
+            self.auto["reason"] = ""
+            self.status = "running"
+            self.error = ""
+            self._append("system", "Claude의 출력 한도 오류를 수정했습니다. 실패한 발언부터 자동 연구를 다시 시작합니다.")
+            repaired = True
         if self.mode == "autonomous" and self.status == "waiting_budget" and "안전 기준 5,000" in self.auto.get("reason", ""):
             # Older deployments paused with spendable credits. Recheck under the
             # user's new zero-only rule at the next scheduler wake.
@@ -1584,6 +1597,11 @@ def main() -> None:
         CloudHandler.session_key = hashlib.sha256("\x00".join(passwords[actor] for actor in ACCOUNTS).encode("utf-8")).digest()
         port = int(os.environ.get("PORT", str(args.port)))
         server = ThreadingHTTPServer(("0.0.0.0", port), CloudHandler)
+        if CloudHandler.lab.mode == "autonomous" and CloudHandler.lab.status == "running":
+            try:
+                CloudHandler.lab.auto_wake(force=True)
+            except ProjectStoreError:
+                print("연구 재개 예약이 실패했습니다. 다음 예약 실행에서 다시 시도합니다.", flush=True)
         print(f"AI R&E cloud server listening on port {port}", flush=True)
         try:
             server.serve_forever()
