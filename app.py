@@ -51,6 +51,12 @@ def now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def next_credit_check(moment: datetime | None = None) -> datetime:
+    kst = (moment or datetime.now(timezone.utc)).astimezone(ZoneInfo("Asia/Seoul"))
+    check = kst.replace(hour=0, minute=10, second=0, microsecond=0)
+    return check if check > kst else check + timedelta(days=1)
+
+
 def safe_name(value: str) -> str:
     name = Path(value.replace("\\", "/")).name
     name = re.sub(r"[^\w.\- ]", "_", name, flags=re.UNICODE).strip(" .")
@@ -806,8 +812,7 @@ class Lab:
             self.auto["next_due_at"] = ""
             return True
         kst = datetime.now(ZoneInfo("Asia/Seoul"))
-        next_midnight = (kst + timedelta(days=1)).replace(hour=0, minute=10, second=0, microsecond=0)
-        self.auto["next_due_at"] = (next_midnight if "전체 크레딧 잔액이 0" in reason else kst + timedelta(hours=1)).isoformat()
+        self.auto["next_due_at"] = (next_credit_check(kst) if "전체 크레딧 잔액이 0" in reason else kst + timedelta(hours=1)).isoformat()
         self.auto["reason"] = reason
         self._append("system", reason)
         self._auto_stage(self.auto["stage"], status="waiting_budget")
@@ -998,9 +1003,7 @@ class Lab:
                     r"HTTP 402|insufficient[_ ]credits?|not enough credits?|크레딧(?:이|가)? 부족|잔액 부족",
                     self.error, re.I))
                 if depleted:
-                    kst = datetime.now(ZoneInfo("Asia/Seoul"))
-                    self.auto["next_due_at"] = (kst + timedelta(days=1)).replace(
-                        hour=0, minute=10, second=0, microsecond=0).isoformat()
+                    self.auto["next_due_at"] = next_credit_check().isoformat()
                     self.status = "waiting_budget"
                     self.auto["reason"] = "BAZE가 잔액 부족으로 호출을 거절했습니다. 다음 한국 시간 자정 후 잔액을 다시 확인합니다."
                     self._append("system", self.auto["reason"])

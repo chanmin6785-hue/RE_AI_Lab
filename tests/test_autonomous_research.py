@@ -4,11 +4,12 @@ import shutil
 import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pptx import Presentation
 from docx import Document
 
-from app import Lab
+from app import Lab, next_credit_check
 from baze_models import BazeError, Reply
 
 
@@ -130,6 +131,13 @@ class AutonomousResearchTest(unittest.TestCase):
         self.lab.auto_wake()
         self.lab.worker.join(5)
         self.assertGreater(len(ResearchClient.calls), 0)
+
+    def test_next_credit_check_uses_upcoming_midnight_window(self):
+        kst = ZoneInfo("Asia/Seoul")
+        day = datetime(2026, 10, 14, 0, 5, tzinfo=kst)
+        self.assertEqual(next_credit_check(day), datetime(2026, 10, 14, 0, 10, tzinfo=kst))
+        self.assertEqual(next_credit_check(day + timedelta(minutes=10)),
+                         datetime(2026, 10, 15, 0, 10, tzinfo=kst))
 
     def test_positive_total_credit_allows_calls_even_when_monthly_is_zero(self):
         ResearchClient.balance = 1
