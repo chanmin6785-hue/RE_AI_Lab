@@ -202,6 +202,20 @@ class Lab:
             self.error = ""
             self._append("system", "시간 초과로 확인하지 못한 발언을 새 호출 번호로 다시 시도합니다. 이전 호출의 과금 여부는 확인할 수 없어 중복 크레딧이 사용될 수 있습니다.")
             repaired = True
+        if (self.mode == "autonomous" and self.status == "waiting_retry"
+                and self.auto.get("compact_prompt_recovery_version") != 1
+                and self.auto.get("stage") == "topic_critiques"
+                and last_activity.get("provider") == "grok"
+                and last_activity.get("phase") == "topic_critique"
+                and last_activity.get("status") == "failed"
+                and "timed out" in str(last_activity.get("error", "")).lower()):
+            self.auto["compact_prompt_recovery_version"] = 1
+            self.auto["reason"] = ""
+            self.auto["next_due_at"] = ""
+            self.status = "running"
+            self.error = ""
+            self._append("system", "후보 비판 요청의 중복 문맥을 줄였습니다. 실패한 Grok 발언을 새 호출 번호로 다시 시도합니다. 이전 호출은 과금됐을 수 있습니다.")
+            repaired = True
         if self.mode == "autonomous" and self.status == "waiting_budget" and "안전 기준 5,000" in self.auto.get("reason", ""):
             # Older deployments paused with spendable credits. Recheck under the
             # user's new zero-only rule at the next scheduler wake.
@@ -714,18 +728,32 @@ class Lab:
                     "명시적 데이터가 없으면 추측임을 밝히세요.\n\n"
                     + self.auto.get("current_case", {}).get("prompt", ""))
         independent = phase in ("topic_proposal", "role_trial")
-        recent = "\n\n".join(
-            f"[{m['actor']}/{m['provider'] or '-'}] {m['content'][:3500]}"
-            for m in self.messages[-24:]
-            if not independent or m["actor"] != "model"
-        )[-12000:]
+        selection_phase = phase in ("topic_proposal", "topic_critique", "topic_ballot",
+                                    "role_trial", "role_review")
+        if selection_phase:
+            # Candidate records carry proposals; the raw proposal transcript would
+            # duplicate them and make slower gateways time out.
+            allowed_model_phase = "topic_critique" if phase in ("topic_critique", "topic_ballot") else "role_review"
+            recent = "\n\n".join(
+                f"[{m['actor']}/{m['provider'] or '-'}] {m['content'][:800]}"
+                for m in self.messages[-32:]
+                if m["actor"] != "model" or (not independent and m["phase"] == allowed_model_phase)
+            )[-4000:]
+        else:
+            recent = "\n\n".join(
+                f"[{m['actor']}/{m['provider'] or '-'}] {m['content'][:3500]}"
+                for m in self.messages[-24:]
+            )[-12000:]
         cycle = self.auto.get("cycle", 1)
-        evidence_files = sorted((self.project / "results").glob("cycle_*_analysis.json"))[-5:]
-        evidence = "\n".join(path.read_text(encoding="utf-8")[:2500] for path in evidence_files)[-9000:]
-        evidence = evidence or "아직 실제 모델 응답 실험 결과 없음"
-        plan_file = self.project / "presentations" / "plan" / "report.md"
-        plan = plan_file.read_text(encoding="utf-8")[:5000] if plan_file.exists() else "아직 계획서 없음"
-        reviews = json.dumps(self.auto.get("reviews", [])[-5:], ensure_ascii=False)[:2500]
+        if selection_phase:
+            evidence, plan, reviews = "아직 실험 전", "아직 계획서 없음", "[]"
+        else:
+            evidence_files = sorted((self.project / "results").glob("cycle_*_analysis.json"))[-5:]
+            evidence = "\n".join(path.read_text(encoding="utf-8")[:2500] for path in evidence_files)[-9000:]
+            evidence = evidence or "아직 실제 모델 응답 실험 결과 없음"
+            plan_file = self.project / "presentations" / "plan" / "report.md"
+            plan = plan_file.read_text(encoding="utf-8")[:5000] if plan_file.exists() else "아직 계획서 없음"
+            reviews = json.dumps(self.auto.get("reviews", [])[-5:], ensure_ascii=False)[:2500]
         rules = (
             "전북과학고 공개 교육과정의 과제연구 계획서 발표→중간발표→최종발표 순서를 따른다. "
             "한국어로 쓰고 AI·물리·수학·정보 중 하나 또는 융합 연구 주제를 네 모델이 스스로 정한다. 주제 변경은 이유와 이전 결과의 영향까지 밝힌다. "
@@ -784,10 +812,12 @@ class Lab:
             "final_script": "최종발표 PPT의 장별 한국어 발표 대본과 예상 질문/답변을 작성한다. 실제 결과와 생성 사례/시뮬레이션을 명확히 구분한다.",
         }
         candidates = self.auto.get("candidates", [])
-        candidate_list = "\n".join(f"{item['id']} [{item['domain']}; 제안 {item['provider'].upper()}] {item['title']} — {item['question']} — 방법: {item['method']}"
-                                   for item in candidates) if phase != "topic_proposal" else ""
-        trials = "\n\n".join(f"[{p.upper()} 작업 표본]\n{self._auto_reply('role_trial', p, 0)[:3500]}"
-                               for p in ORDER if self._auto_reply('role_trial', p, 0))
+        candidate_list = "\n".join(
+            f"{item['id']} [{item['domain']}; 제안 {item['provider'].upper()}] "
+            f"{item['title'][:100]} — {item['question'][:200]} — 방법: {item['method'][:240]}"
+            for item in candidates) if phase in ("topic_critique", "topic_ballot") else ""
+        trials = "\n\n".join(f"[{p.upper()} 작업 표본]\n{self._auto_reply('role_trial', p, 0)[:2200]}"
+                               for p in ORDER if self._auto_reply('role_trial', p, 0)) if phase == "role_review" else ""
         return (f"공동 과학고 R&E 연구. 당신은 {provider.upper()}이고 역할은 {self.roles.get(provider, '협의 중')}이다.\n"
                 f"연구 주제: {self.topic or '선정 중'}\n연구 질문: {self.question or '선정 중'}\n"
                 f"단계: {phase}; 실험 주기: {cycle}; 발언 순서: {' → '.join(self.call_order)}\n"
@@ -796,7 +826,7 @@ class Lab:
                  f"동일 작업 표본: {trials if phase == 'role_review' else '(평가 단계에서 제공)'}\n"
                 f"검토 기록: {reviews}\n계획서 발췌: {plan}\n"
                 f"실험 분석 자료: {evidence}\n"
-                f"사용자/연구 자료 발췌: {(self._materials() or '(없음)')[:6000]}\n"
+                f"사용자/연구 자료 발췌: {(self._materials() or '(없음)')[:2000 if selection_phase else 6000]}\n"
                 f"최근 대화 발췌(전체 기록은 저장소에 보관되며 이 호출에는 일부만 제공): {recent or '(첫 발언)'}")
 
     def _activity_event(self, item: dict) -> None:

@@ -312,6 +312,20 @@ class AutonomousResearchTest(unittest.TestCase):
         self.assertEqual(sum("시간 초과로 확인하지 못한 발언" in item["content"]
                              for item in restored_again.messages), 1)
 
+    def test_critique_prompt_contains_candidates_without_duplicate_proposal_transcripts(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        self.assertEqual(self.lab.auto["stage"], "topic_critiques")
+        for item in self.lab.auto["candidates"]:
+            item["method"] = "독립변수와 대조군을 반복 측정한다. " * 60
+        self.lab.messages.append({"actor": "model", "provider": "gemini",
+                                  "phase": "topic_proposal", "content": "DUPLICATE_PROPOSAL " * 300})
+        prompt = self.lab._autonomous_prompt("topic_critique", "grok", 0)
+        self.assertLess(len(prompt.encode("utf-8")), 20000)
+        self.assertNotIn("DUPLICATE_PROPOSAL", prompt)
+        for item in self.lab.auto["candidates"]:
+            self.assertIn(item["id"], prompt)
+
     def test_overview_reads_complete_archived_dialogue(self):
         self.lab.start(None, self.models, self.assignments)
         self.advance_until("waiting_review")
