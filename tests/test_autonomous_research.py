@@ -259,6 +259,59 @@ class AutonomousResearchTest(unittest.TestCase):
         self.assertGreater(len(ResearchClient.calls), 0)
         self.assertGreater(self.lab.activities[-1]["turn"], failed_turn)
 
+    def test_gateway_timeout_waits_and_retries_same_speaker_with_new_audit_number(self):
+        for client in self.lab.clients.values():
+            client.ask = lambda *args, **kwargs: (_ for _ in ()).throw(
+                BazeError("연결 오류: The read operation timed out"))
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        self.assertEqual(self.lab.status, "waiting_retry")
+        failed = self.lab.activities[-1]
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("중복 크레딧", self.lab.auto["reason"])
+        self.lab.auto_wake()
+        self.assertEqual(len(self.lab.activities), 1)
+        for client in self.lab.clients.values():
+            del client.ask
+        self.lab.auto["next_due_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        self.lab.auto["last_wake_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.lab.auto_wake()
+        self.lab.worker.join(5)
+        completed = next(item for item in self.lab.activities if item["status"] == "completed")
+        self.assertEqual((completed["phase"], completed["provider"]),
+                         (failed["phase"], failed["provider"]))
+        self.assertGreater(completed["turn"], failed["turn"])
+
+    def test_restore_recovers_old_paused_timeout_once(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.lab.worker.join(5)
+        snapshot = copy.deepcopy(self.lab._snapshot())
+        snapshot["status"] = "paused"
+        snapshot["error"] = "연결 오류: The read operation timed out"
+        snapshot["auto"]["stage"] = "topic_critiques"
+        snapshot["activities"].append({"turn": snapshot["turn_no"] + 1,
+                                       "phase": "topic_critique", "provider": "grok",
+                                       "status": "failed", "error": snapshot["error"]})
+
+        class RecoveryStore:
+            def __init__(self, state):
+                self.state = copy.deepcopy(state)
+
+            def load(self, _target):
+                return copy.deepcopy(self.state)
+
+            def save(self, _project, state):
+                self.state = copy.deepcopy(state)
+
+        store = RecoveryStore(snapshot)
+        restored = Lab(ResearchClient, self.temp, project_store=store)
+        self.assertEqual(restored.status, "running")
+        self.assertEqual(restored.error, "")
+        self.assertEqual(restored.auto["timeout_recovery_version"], 1)
+        restored_again = Lab(ResearchClient, self.temp, project_store=store)
+        self.assertEqual(sum("시간 초과로 확인하지 못한 발언" in item["content"]
+                             for item in restored_again.messages), 1)
+
     def test_overview_reads_complete_archived_dialogue(self):
         self.lab.start(None, self.models, self.assignments)
         self.advance_until("waiting_review")

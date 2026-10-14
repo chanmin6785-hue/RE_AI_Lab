@@ -63,6 +63,14 @@ def next_credit_check(moment: datetime | None = None) -> datetime:
     return check if check > kst else check + timedelta(days=1)
 
 
+def retryable_gateway_error(error: Exception) -> bool:
+    if not isinstance(error, BazeError):
+        return False
+    message = str(error).lower()
+    return (("연결 오류:" in message and ("timed out" in message or "timeout" in message))
+            or bool(re.search(r"http (?:408|429|500|502|503|504)\b", message)))
+
+
 def safe_name(value: str) -> str:
     name = Path(value.replace("\\", "/")).name
     name = re.sub(r"[^\w.\- ]", "_", name, flags=re.UNICODE).strip(" .")
@@ -95,7 +103,7 @@ class Lab:
         self.reset()
         if self.key_store:
             for actor, (key, models) in self.key_store.load_all().items():
-                self.clients[actor] = self.client_factory(key, timeout=150.0)
+                self.clients[actor] = self.client_factory(key, timeout=240.0)
                 self.available_by_account[actor] = models
         if self.project_store:
             saved = self.project_store.load(self.projects)
@@ -183,6 +191,17 @@ class Lab:
             self.error = ""
             self._append("system", "Claude의 출력 한도 오류를 수정했습니다. 실패한 발언부터 자동 연구를 다시 시작합니다.")
             repaired = True
+        if (self.mode == "autonomous" and self.status == "paused"
+                and self.auto.get("timeout_recovery_version") != 1
+                and last_activity.get("status") == "failed"
+                and "연결 오류:" in str(last_activity.get("error", ""))
+                and "timed out" in str(last_activity.get("error", "")).lower()):
+            self.auto["timeout_recovery_version"] = 1
+            self.auto["reason"] = ""
+            self.status = "running"
+            self.error = ""
+            self._append("system", "시간 초과로 확인하지 못한 발언을 새 호출 번호로 다시 시도합니다. 이전 호출의 과금 여부는 확인할 수 없어 중복 크레딧이 사용될 수 있습니다.")
+            repaired = True
         if self.mode == "autonomous" and self.status == "waiting_budget" and "안전 기준 5,000" in self.auto.get("reason", ""):
             # Older deployments paused with spendable credits. Recheck under the
             # user's new zero-only rule at the next scheduler wake.
@@ -223,7 +242,7 @@ class Lab:
             key = key or os.environ.get("BAZE_API_KEY", "").strip()
         if not key:
             raise ValueError("BAZE API 키를 입력하세요.")
-        client = self.client_factory(key, timeout=150.0)
+        client = self.client_factory(key, timeout=240.0)
         try:
             ids = client.list_models()
         except Exception as exc:
@@ -349,7 +368,7 @@ class Lab:
 
     def start(self, rounds: int | None, models: dict[str, str], assignments: dict[str, str], step_mode: bool = False) -> dict:
         with self.lock:
-            if self.status in ("running", "paused", "stopping", "waiting_review", "waiting_budget"):
+            if self.status in ("running", "paused", "stopping", "waiting_review", "waiting_budget", "waiting_retry"):
                 raise ValueError("이미 연구가 진행 중입니다.")
             if not all(actor in self.clients for actor in ACCOUNTS):
                 raise ValueError("네 칸에 BAZE 키를 연결해야 합니다.")
@@ -433,7 +452,7 @@ class Lab:
         if actor not in ACCOUNTS:
             raise ValueError("알 수 없는 참여자입니다.")
         with self.lock:
-            if self.status not in ("running", "paused", "waiting_review", "waiting_budget"):
+            if self.status not in ("running", "paused", "waiting_review", "waiting_budget", "waiting_retry"):
                 raise ValueError("진행 중인 연구에서만 참여할 수 있습니다.")
             result = self._append(actor, content, phase=self.phase, round_no=self.round_no)
             self._checkpoint()
@@ -455,8 +474,9 @@ class Lab:
 
     def resume(self) -> None:
         with self.condition:
-            if self.status != "paused":
+            if self.status not in ("paused", "waiting_retry"):
                 raise ValueError("일시정지된 연구가 없습니다.")
+            previous_status = self.status
             previous_error = self.error
             previous_reason = self.auto.get("reason", "")
             self.status = "running"
@@ -467,7 +487,7 @@ class Lab:
             try:
                 self._checkpoint()
             except Exception:
-                self.status = "paused"
+                self.status = previous_status
                 self.error = previous_error
                 if self.mode == "autonomous":
                     self.auto["reason"] = previous_reason
@@ -481,7 +501,7 @@ class Lab:
 
     def stop(self) -> None:
         with self.condition:
-            if self.status not in ("running", "paused", "waiting_review", "waiting_budget"):
+            if self.status not in ("running", "paused", "waiting_review", "waiting_budget", "waiting_retry"):
                 raise ValueError("진행 중인 연구가 없습니다.")
             previous_status = self.status
             self.stop_requested = True
@@ -501,7 +521,7 @@ class Lab:
         if actor not in ACCOUNTS or provider not in ORDER:
             raise ValueError("참여자 또는 모델 계열을 확인하세요.")
         with self.lock:
-            if self.status not in ("paused", "waiting_review", "waiting_budget") or any(item["status"] == "waiting" for item in self.activities):
+            if self.status not in ("paused", "waiting_review", "waiting_budget", "waiting_retry") or any(item["status"] == "waiting" for item in self.activities):
                 raise ValueError("모델 응답이 끝난 뒤 연구가 일시정지된 상태에서 교체하세요.")
             account = self.assignments[provider]
             client = self.clients.get(account)
@@ -514,7 +534,7 @@ class Lab:
         if not model.startswith(provider + "-") or model not in available:
             raise ValueError("담당 계정에서 사용할 수 있는 해당 계열의 정확한 모델 ID를 입력하세요.")
         with self.lock:
-            if self.status not in ("paused", "waiting_review", "waiting_budget") or any(item["status"] == "waiting" for item in self.activities):
+            if self.status not in ("paused", "waiting_review", "waiting_budget", "waiting_retry") or any(item["status"] == "waiting" for item in self.activities):
                 raise ValueError("모델 응답이 끝난 뒤 다시 시도하세요.")
             previous = self.models[provider]
             if previous == model:
@@ -582,7 +602,7 @@ class Lab:
 
     def upload(self, filename: str, encoded: str) -> str:
         with self.lock:
-            if self.status not in ("running", "paused", "waiting_review", "waiting_budget") or not self.project:
+            if self.status not in ("running", "paused", "waiting_review", "waiting_budget", "waiting_retry") or not self.project:
                 raise ValueError("연구를 시작한 뒤 자료를 추가하세요.")
             name = safe_name(filename)
             if Path(name).suffix.lower() not in TEXT_EXTENSIONS:
@@ -610,7 +630,7 @@ class Lab:
         if not title or urlparse(url).scheme not in ("http", "https"):
             raise ValueError("출처 제목과 http(s) URL을 입력하세요.")
         with self.lock:
-            if self.status not in ("running", "paused", "waiting_review", "waiting_budget") or not self.project:
+            if self.status not in ("running", "paused", "waiting_review", "waiting_budget", "waiting_retry") or not self.project:
                 raise ValueError("연구를 시작한 뒤 출처를 추가하세요.")
             with (self.project / "references" / "sources.csv").open("a", newline="", encoding="utf-8") as fh:
                 csv.writer(fh).writerow([now(), title, url, note])
@@ -1288,6 +1308,13 @@ class Lab:
                     self.status = "waiting_budget"
                     self.auto["reason"] = "BAZE가 잔액 부족으로 호출을 거절했습니다. 다음 한국 시간 자정 후 잔액을 다시 확인합니다."
                     self._append("system", self.auto["reason"])
+                elif retryable_gateway_error(exc):
+                    self.auto["next_due_at"] = (datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=20)).isoformat()
+                    self.status = "waiting_retry"
+                    self.error = ""
+                    self.auto["reason"] = ("BAZE 연결 응답을 확인하지 못했습니다. 실패 기록을 남기고 다음 정기 실행에서 새 호출 번호로 재시도합니다. "
+                                           "이전 호출의 과금 여부는 확인할 수 없어 중복 크레딧이 사용될 수 있습니다.")
+                    self._append("system", self.auto["reason"])
                 else:
                     self.status = "paused"
                     self.auto["reason"] = "자동 실행 오류. 활동 기록을 확인한 뒤 재개하세요."
@@ -1303,11 +1330,13 @@ class Lab:
         with self.lock:
             if self.mode != "autonomous":
                 return self.public_state()
-            if self.status == "waiting_budget":
+            if self.status in ("waiting_budget", "waiting_retry"):
                 due = datetime.fromisoformat(self.auto["next_due_at"])
-                if datetime.now(due.tzinfo) < due:
+                if datetime.now(due.tzinfo) < due and not (force and self.status == "waiting_retry"):
                     return self.public_state()
                 self.status = "running"
+                self.error = ""
+                self.auto["reason"] = ""
             if self.status != "running" or (self.worker is not None and self.worker.is_alive()):
                 return self.public_state()
             last = self.auto.get("last_wake_at")

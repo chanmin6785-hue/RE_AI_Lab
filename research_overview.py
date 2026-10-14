@@ -134,6 +134,8 @@ def build_overview(transcript: Path | None, *, topic: str, question: str,
     task = STAGE_TASKS.get(stage, "연구를 시작하면 현재 작업이 표시됩니다.")
     if status == "waiting_budget":
         task = f"{task} 현재 크레딧이 0인 계정의 보충을 기다립니다."
+    elif status == "waiting_retry":
+        task = f"{task} 외부 연결 시간 초과 후 다음 예약 실행을 기다립니다."
     elif status == "paused":
         task = f"{task} 연구가 일시정지됐습니다."
     elif status == "stopped":

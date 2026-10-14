@@ -176,10 +176,10 @@ function renderOverview(data) {
   }
   $("overviewCoverage").textContent = data.first_at ? `전체 저장 대화 기준 · ${overviewTime(data.first_at)}부터 ${overviewTime(data.last_at)}까지` : "아직 저장된 대화가 없습니다.";
   const current = data.current || {};
-  $("overviewStage").textContent = `${phaseName(current.stage) || "준비"} · ${({running:"자동 진행 중",waiting_budget:"크레딧 보충 대기",waiting_review:"참여자 검토 대기",paused:"일시정지",completed:"완료",stopped:"중지",failed:"오류",idle:"대기"})[current.status] || current.status || "대기"}`;
+  $("overviewStage").textContent = `${phaseName(current.stage) || "준비"} · ${({running:"자동 진행 중",waiting_budget:"크레딧 보충 대기",waiting_retry:"연결 재시도 대기",waiting_review:"참여자 검토 대기",paused:"일시정지",completed:"완료",stopped:"중지",failed:"오류",idle:"대기"})[current.status] || current.status || "대기"}`;
   const next = current.provider ? ` ${LABELS[current.provider]}${current.status === "running" ? "가 담당합니다." : " 차례입니다."}` : "";
   $("overviewTask").textContent = (current.task || "") + next;
-  $("overviewReason").textContent = [current.reason, current.status === "waiting_budget" && current.next_due_at ? `다음 잔액 확인: ${overviewTime(current.next_due_at)}` : ""].filter(Boolean).join(" · ");
+  $("overviewReason").textContent = [current.reason, current.status === "waiting_budget" && current.next_due_at ? `다음 잔액 확인: ${overviewTime(current.next_due_at)}` : "", current.status === "waiting_retry" && current.next_due_at ? `다음 연결 재시도 예약: ${overviewTime(current.next_due_at)} 이후 정기 실행` : ""].filter(Boolean).join(" · ");
   const roles = $("overviewRoles");
   roles.replaceChildren();
   for (const role of data.roles || []) {
@@ -363,7 +363,7 @@ function render(state) {
   selfActor = state.self_actor || "user";
   csrfToken = state.csrf_token || "";
   $('logoutBtn').hidden = !state.cloud;
-  const active = ["running", "paused", "waiting_review", "waiting_budget"].includes(state.status);
+  const active = ["running", "paused", "waiting_review", "waiting_budget", "waiting_retry"].includes(state.status);
   const connected = state.connected;
   const accounts = state.accounts || {};
   const accountSignature = JSON.stringify(accounts);
@@ -381,7 +381,7 @@ function render(state) {
     $("account-" + provider).disabled = active;
     $("model-" + provider).disabled = active || !availableFor(state, $("account-" + provider).value, provider).length;
   }
-  const names = {idle:"대기 중",running:"자동 진행 중",paused:"일시정지",waiting_review:"검토 대기",waiting_budget:"잔액 보충 대기",stopping:"중지 중",stopped:"중지됨",completed:"완료",failed:"오류"};
+  const names = {idle:"대기 중",running:"자동 진행 중",paused:"일시정지",waiting_review:"검토 대기",waiting_budget:"잔액 보충 대기",waiting_retry:"연결 재시도 대기",stopping:"중지 중",stopped:"중지됨",completed:"완료",failed:"오류"};
   $("statusBadge").textContent = names[state.status] || state.status;
   $("statusBadge").className = "status-badge " + state.status;
   const connectedCount = ACCOUNTS.filter((actor) => accounts[actor]?.connected).length;
@@ -412,14 +412,14 @@ function render(state) {
   $("restartBtn").disabled = !connected || !state.project || ["running", "stopping"].includes(state.status) ||
     (state.activities || []).some((item) => item.status === "waiting");
   $("pauseBtn").disabled = state.status !== "running";
-  $("resumeBtn").disabled = state.status !== "paused";
-  $("stepBtn").disabled = state.status !== "running" && state.status !== "waiting_budget";
-  const swapReady = ["paused", "waiting_review", "waiting_budget"].includes(state.status) && !(state.activities || []).some((item) => item.status === "waiting");
+  $("resumeBtn").disabled = !["paused", "waiting_retry"].includes(state.status);
+  $("stepBtn").disabled = !["running", "waiting_budget", "waiting_retry"].includes(state.status);
+  const swapReady = ["paused", "waiting_review", "waiting_budget", "waiting_retry"].includes(state.status) && !(state.activities || []).some((item) => item.status === "waiting");
   $("swapBtn").disabled = !swapReady || requestBusy;
   $("swapCurrent").textContent = `현재 모델: ${state.models?.[$("swapProvider").value] || "연구 시작 후 표시"}`;
   $("swapStatus").textContent = !state.project ? "연구 시작 후 사용할 수 있습니다." :
     state.status === "running" ? "일시정지를 누르고 현재 응답이 끝날 때까지 기다리세요." :
-    ["paused", "waiting_review", "waiting_budget"].includes(state.status) && !swapReady ? "현재 모델 응답이 끝나면 교체할 수 있습니다." :
+    ["paused", "waiting_review", "waiting_budget", "waiting_retry"].includes(state.status) && !swapReady ? "현재 모델 응답이 끝나면 교체할 수 있습니다." :
     swapReady ? "지금 교체할 수 있습니다. 다음 발언부터 적용됩니다." : "진행 중인 연구가 없습니다.";
   const history = state.model_changes || [];
   $("swapHistory").replaceChildren(...history.map((change) => {
