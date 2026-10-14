@@ -125,7 +125,9 @@ function displayName(message) {
 }
 
 function phaseName(phase, round) {
-  const names = {role_selection:"역할 협의",topic_selection:"주제 선정",research:`토론 ${round}라운드`,
+  const names = {role_selection:"역할 협의",topic_selection:"주제 선정",topic_proposal:"독립 주제 제안",topic_critique:"후보 비판",
+    topic_ballot:"주제 순위 투표",role_trial:"공통 작업 표본",role_review:"역할 적합성 평가",simulation_design:"수식 시뮬레이션 설계",
+    topic_proposals:"독립 주제 제안",topic_critiques:"후보 비판",topic_ballots:"주제 순위 투표",role_trials:"공통 작업 표본",role_reviews:"역할 적합성 평가",research:`토론 ${round}라운드`,
     roles:"역할 협의",topic:"주제 선정",plan_discussion:"연구 계획 토론",plan_report:"연구계획보고서",plan_slides:"계획발표 PPT",
     plan_script:"계획발표 대본",plan_review:"계획 자료 검토",experiment_discussion:"실험 설계 토론",experiment_cases:"실험 사례 생성",
     experiment_run:"실제 모델 실험",experiment_analysis:"실험 결과 분석",middle_slides:"중간발표 PPT",middle_script:"중간발표 대본",
@@ -396,8 +398,8 @@ function render(state) {
   document.querySelectorAll(".disconnect-key").forEach((button) => button.disabled = !accounts[button.dataset.slot]?.connected || active || state.status === "stopping" || requestBusy);
   $("keyStorageStatus").textContent = state.key_storage === "persistent" ? "암호화해 외부 저장소에 보관 중 · 서버가 다시 시작되어도 자동 복원됩니다." : "임시 보관 중 · 영구 저장소 설정 전에는 서버 재시작 시 키가 사라집니다.";
   $("keyStorageStatus").classList.toggle("persistent", state.key_storage === "persistent");
-  $("topicTitle").textContent = state.topic || "모델들이 역할과 연구 주제를 선정합니다";
-  $("questionText").textContent = state.question || "네 모델이 먼저 역할을 협의하고 AI 분야의 주제를 선정합니다.";
+  $("topicTitle").textContent = state.topic || "모델들이 연구 주제를 선정합니다";
+  $("questionText").textContent = state.question || "AI·물리·수학·정보 후보를 비교하고 주제에 맞는 역할을 검증합니다.";
   $("phaseText").textContent = phaseName(state.phase, state.round) || "준비";
   $("turnText").textContent = `${state.activities?.length || 0}회 기록 · 필요에 따라 계속`;
   const assignment = currentAssignment();
@@ -407,6 +409,8 @@ function render(state) {
   $("assignmentStatus").textContent = !connected ? "네 칸에 키를 연결해야 합니다." : !countValid ? "각 칸이 정확히 한 모델을 맡아야 합니다." : !providerValid ? "선택한 계정에서 사용할 수 없는 모델이 있습니다." : "네 칸에 모델 하나씩 배정 완료";
   $("assignmentStatus").className = "assignment-status " + (providerValid && modelsValid ? "valid" : "invalid");
   $("startBtn").disabled = !connected || active || state.status === "stopping" || !providerValid || !modelsValid;
+  $("restartBtn").disabled = !connected || !state.project || ["running", "stopping"].includes(state.status) ||
+    (state.activities || []).some((item) => item.status === "waiting");
   $("pauseBtn").disabled = state.status !== "running";
   $("resumeBtn").disabled = state.status !== "paused";
   $("stepBtn").disabled = state.status !== "running" && state.status !== "waiting_budget";
@@ -516,6 +520,16 @@ $("startBtn").addEventListener("click", async () => {
   try {
     await post("/api/start", {rounds:null,models,assignments:currentAssignment(),step_mode:false});
     toast("역할 협의를 시작했습니다.");
+    openTab("chat");
+    await refresh();
+  } catch (error) { toast(error.message, true); }
+});
+
+$("restartBtn").addEventListener("click", async () => {
+  if (!window.confirm("이전 연구의 기록과 자료를 보존하고 새 연구를 처음부터 시작할까요? 현재 모델 응답이 진행 중이면 완료 후 다시 시도해야 합니다.")) return;
+  try {
+    await post("/api/restart", {});
+    toast("이전 기록을 보존하고 새 연구를 시작했습니다.");
     openTab("chat");
     await refresh();
   } catch (error) { toast(error.message, true); }

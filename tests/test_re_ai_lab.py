@@ -325,6 +325,8 @@ class LabTest(unittest.TestCase):
         deadline = time.monotonic() + 3
         while self.lab.public_state()["status"] != "paused" and time.monotonic() < deadline:
             time.sleep(.01)
+        while any(item["status"] == "waiting" for item in self.lab.public_state()["activities"]) and time.monotonic() < deadline:
+            time.sleep(.01)
         self.lab.project_store = FailingProjectStore()
         before = (self.lab.project / "data/raw/conversation.jsonl").read_bytes()
         with self.assertRaises(KeyStoreError):

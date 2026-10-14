@@ -1,5 +1,6 @@
 import json
 import copy
+import re
 from pathlib import Path
 import shutil
 import unittest
@@ -12,12 +13,15 @@ from docx import Document
 
 from app import Lab, next_credit_check
 from baze_models import BazeError, Reply
+from research_selection import assign_roles, select_topic
+from research_workflow import simulation_protocol
 
 
 class ResearchClient:
     calls = []
     balance = 8000
     monthly_balance = None
+    selected_domain = "AI"
 
     def __init__(self, key, timeout):
         self.api_key = key
@@ -35,6 +39,31 @@ class ResearchClient:
         type(self).calls.append((provider, prompt, model))
         phase = prompt.split("단계: ", 1)[1].split(";", 1)[0] if "단계: " in prompt else ""
         text = {
+            "topic_proposal": lambda: "CANDIDATES_JSON: " + json.dumps([
+                {"title": f"{provider}의 {re.search(r'첫 후보는 (AI|물리|수학|정보) 분야', prompt).group(1)} 분야 연구 후보",
+                 "question": "독립 변수 변화가 측정 가능한 결과에 어떤 영향을 주는가?",
+                 "domain": re.search(r'첫 후보는 (AI|물리|수학|정보) 분야', prompt).group(1),
+                 "method": "공개 자료와 반복 가능한 수식 또는 모델 호출로 비교한다"},
+                {"title": f"{provider}의 정보 융합 연구 후보",
+                 "question": "모형과 기준선 사이의 수치 차이는 재현되는가?",
+                 "domain": "정보" if re.search(r'첫 후보는 (AI|물리|수학|정보) 분야', prompt).group(1) != "정보" else "AI",
+                 "method": "동일한 입력 격자에서 두 모형 결과를 비교한다"}], ensure_ascii=False),
+            "topic_critique": lambda: "두 후보의 자료 접근성과 대조군을 검토했다.\nCANDIDATES_JSON: " + json.dumps([
+                {"title": f"{provider}의 개선된 수학 연구 후보",
+                 "question": "수식의 매개변수 변화가 예측 오차에 영향을 주는가?",
+                 "domain": "수학", "method": "고정된 입력 격자와 기준선 수식을 반복 비교한다"}], ensure_ascii=False),
+            "topic_ballot": lambda: "동일한 기준으로 후보를 비교했다.\nRANKING: " + ",".join(
+                ([next((cid for cid, domain in re.findall(r"(C\d{2}) \[(AI|물리|수학|정보);", prompt)
+                        if domain == type(self).selected_domain), "C01")] +
+                 [cid for cid in re.findall(r"(C\d{2}) \[", prompt)
+                  if cid != next((cid for cid, domain in re.findall(r"(C\d{2}) \[(AI|물리|수학|정보);", prompt)
+                                  if domain == type(self).selected_domain), "C01")])[:3]),
+            "role_trial": lambda: "이론: 가설을 수식으로 검증한다. 실험: 통제군을 둔다. 구현: 재현 코드를 설계한다. 비판: 반례를 검토한다.",
+            "role_review": lambda: "실제 작업 표본을 평가했다.\nSCORES_JSON: " + json.dumps({
+                name: {competency: 5 if index == position else 2
+                       for position, competency in enumerate(("theory", "experiment", "implementation", "critique"))}
+                for index, name in enumerate(("gpt", "claude", "gemini", "grok"))}),
+            "simulation_design": lambda: '가정에 따른 수식 계산이다.\nSIMULATION_JSON: {"expression":"x*x","baseline":"x","x_start":0,"x_stop":10,"points":30,"parameters":{},"hypothesis":"차이가 증가한다","limitations":"실측이 아니다"}',
             "role_selection": "MY_ROLE: 실험 설계\n" + "\n".join(
                 f"ROLE_{name.upper()}: 검증과 분석" for name in ("gpt", "claude", "gemini", "grok")),
             "topic_selection": "RESEARCH_TOPIC: 네 모델 답변 비교\nRESEARCH_QUESTION: 동일 질문에 대한 응답은 어떻게 다른가?",
@@ -54,6 +83,8 @@ class ResearchClient:
             "final_slides": "SLIDE 1: 최종 결과\n- 관찰값과 한계",
             "final_script": "# 최종발표 대본\n결과와 한계를 발표합니다.",
         }.get(phase, "4")
+        if callable(text):
+            text = text()
         return Reply(provider, model, text, {"input_tokens": 10}, {"id": f"fake-{len(type(self).calls)}"})
 
 
@@ -64,6 +95,7 @@ class AutonomousResearchTest(unittest.TestCase):
         ResearchClient.calls = []
         ResearchClient.balance = 8000
         ResearchClient.monthly_balance = None
+        ResearchClient.selected_domain = "AI"
         self.lab = Lab(ResearchClient, self.temp)
         for actor in ("user", "friend", "member3", "member4"):
             self.lab.connect("KEY_" + actor, actor=actor)
@@ -89,7 +121,14 @@ class AutonomousResearchTest(unittest.TestCase):
         self.lab.start(None, self.models, self.assignments)
         self.advance_until("waiting_review")
         self.assertEqual(self.lab.auto["stage"], "plan_review")
-        self.assertEqual(len(self.lab.deliverables()), 5)
+        self.assertEqual(self.lab.auto["domain"], "AI")
+        self.assertEqual({item["provider"] for item in self.lab.auto["candidates"]}, set(self.models))
+        self.assertEqual({item["domain"] for item in self.lab.auto["candidates"]}, {"AI", "물리", "수학", "정보"})
+        self.assertEqual(len(self.lab.auto["ballots"]), 4)
+        self.assertEqual(len(set(self.lab.roles.values())), 4)
+        self.assertIn("작업 표본", (self.lab.project / "research/role_selection.md").read_text(encoding="utf-8"))
+        self.assertIn("후보 비교", (self.lab.project / "research/topic_selection.md").read_text(encoding="utf-8"))
+        self.assertEqual(len(self.lab.deliverables()), 8)
         report = self.lab.project / "presentations" / "plan" / "report.docx"
         self.assertIn("연구계획보고서", " ".join(p.text for p in Document(str(report)).paragraphs))
         plan = self.lab.project / "presentations" / "plan" / "slides.pptx"
@@ -116,6 +155,60 @@ class AutonomousResearchTest(unittest.TestCase):
         self.assertEqual(self.lab.status, "completed")
         self.assertEqual([row["stage"] for row in self.lab.auto["reviews"]],
                          ["plan_review", "plan_review", "middle_review", "final_review"])
+
+    def test_physics_topic_uses_simulation_not_model_comparison(self):
+        ResearchClient.selected_domain = "물리"
+        self.lab.start(None, self.models, self.assignments)
+        self.advance_until("waiting_review")
+        self.assertEqual(self.lab.auto["domain"], "물리")
+        self.assertIn("물리", self.lab.topic)
+        self.lab.review("plan_review", True, "수식 모델 검토", "user")
+        self.advance_until("waiting_review")
+        self.assertEqual(self.lab.auto["stage"], "middle_review")
+        self.assertEqual(self.lab.auto["observations"], [])
+        self.assertFalse((self.lab.project / "data/processed/observations.jsonl").exists())
+        analysis = json.loads((self.lab.project / "results/cycle_01_analysis.json").read_text(encoding="utf-8"))
+        self.assertEqual(analysis["evidence"], "SIMULATED_MODEL")
+        self.assertEqual(analysis["n"], 30)
+        dataset = (self.lab.project / "datasets/cycle_01_simulated_data.csv").read_text(encoding="utf-8-sig")
+        self.assertIn("SIMULATED_MODEL", dataset)
+
+    def test_restart_preserves_prior_project_and_starts_new_selection(self):
+        self.lab.start(None, self.models, self.assignments)
+        self.advance_until("waiting_review")
+        prior = self.lab.project
+        prior_turns = self.lab.turn_no
+        self.lab.restart()
+        self.lab.worker.join(5)
+        self.assertNotEqual(self.lab.project, prior)
+        self.assertEqual(self.lab.auto["selection_version"], 2)
+        archived = json.loads((prior / "research/archived_state_before_restart.json").read_text(encoding="utf-8"))
+        self.assertEqual(archived["turn_no"], prior_turns)
+        self.assertEqual(archived["status"], "waiting_review")
+        self.assertTrue((prior / "presentations/plan/report.md").exists())
+
+    def test_selection_counts_all_four_ballots_and_excludes_self_role_scores(self):
+        candidates = [{"id": "C01", "title": "첫 후보"}, {"id": "C02", "title": "둘째 후보"},
+                      {"id": "C03", "title": "셋째 후보"}]
+        ballots = {"gpt": ["C01", "C02", "C03"], "claude": ["C02", "C03", "C01"],
+                   "gemini": ["C02", "C03", "C01"], "grok": ["C03", "C02", "C01"]}
+        winner, comparison = select_topic(candidates, ballots)
+        self.assertEqual(winner["id"], "C02")
+        self.assertEqual(len(comparison), 3)
+        competences = ("theory", "experiment", "implementation", "critique")
+        providers = ("gpt", "claude", "gemini", "grok")
+        reviews = {judge: {provider: {task: (5 if task == competences[index] else 2)
+                                      for task in competences}
+                           for index, provider in enumerate(providers)} for judge in providers}
+        reviews["gpt"]["gpt"] = dict.fromkeys(competences, 1)
+        roles, scores = assign_roles(providers, reviews)
+        self.assertEqual(roles["gpt"], "이론·수학적 검증")
+        self.assertEqual(scores["gpt"]["theory"], 5)
+
+    def test_simulation_protocol_rejects_model_authored_code(self):
+        malicious = {"expression": "__import__('os').system('dir')", "baseline": "x",
+                     "x_start": 0, "x_stop": 1, "points": 20}
+        self.assertIsNone(simulation_protocol("SIMULATION_JSON: " + json.dumps(malicious)))
 
     def test_low_credit_waits_without_paid_call(self):
         ResearchClient.balance = 0
@@ -181,8 +274,8 @@ class AutonomousResearchTest(unittest.TestCase):
 
     def test_restore_recreates_empty_folders_and_missing_role_file(self):
         self.lab.start(None, self.models, self.assignments)
-        self.lab.worker.join(5)
-        self.assertEqual(self.lab.auto["stage"], "topic")
+        self.advance_until("waiting_review")
+        self.assertEqual(self.lab.auto["stage"], "plan_review")
         snapshot = copy.deepcopy(self.lab._snapshot())
         snapshot["status"] = "waiting_budget"
         snapshot["error"] = "[Errno 2] No such file or directory: 'research/role_selection.md'"

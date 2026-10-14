@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import csv
 import json
+import math
 import random
 import re
 import statistics
@@ -16,12 +19,102 @@ from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Inches, Pt
 
 
-STAGES = ("roles", "topic", "plan_discussion", "plan_report", "plan_slides",
-          "plan_script", "plan_review", "experiment_discussion", "experiment_cases",
+STAGES = ("topic_proposals", "topic_critiques", "topic_ballots", "role_trials", "role_reviews",
+          "roles", "topic", "plan_discussion", "plan_report", "plan_slides",
+          "plan_script", "plan_review", "experiment_discussion", "experiment_cases", "simulation_design",
           "experiment_run", "experiment_analysis", "middle_slides", "middle_script",
           "middle_review", "final_discussion", "final_report", "final_slides",
           "final_script", "final_review", "completed")
 REVIEW_STAGES = {"plan_review": "연구 계획", "middle_review": "중간 발표", "final_review": "최종 결과"}
+
+
+_FUNCTIONS = {"sin": math.sin, "cos": math.cos, "tan": math.tan, "sqrt": math.sqrt,
+              "exp": math.exp, "log": math.log, "abs": abs}
+_OPERATORS = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
+              ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b,
+              ast.Pow: lambda a, b: a ** b}
+
+
+def simulation_protocol(text: str) -> dict | None:
+    """Read a declarative numerical model; never execute model-authored code."""
+    from research_selection import marked_json
+    data = marked_json(text, "SIMULATION_JSON")
+    if not isinstance(data, dict):
+        return None
+    try:
+        expression, baseline = str(data["expression"]), str(data["baseline"])
+        start, stop = float(data["x_start"]), float(data["x_stop"])
+        points = int(data["points"])
+        parameters = data.get("parameters", {})
+        if not isinstance(parameters, dict) or len(parameters) > 8:
+            return None
+        parameters = {str(k): float(v) for k, v in parameters.items()}
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{0,20}", k) or k in ("x", *(_FUNCTIONS.keys()))
+               or not math.isfinite(v) or abs(v) > 10000 for k, v in parameters.items()):
+            return None
+        if not 10 <= points <= 200 or not all(math.isfinite(v) and abs(v) <= 10000 for v in (start, stop)) or stop <= start:
+            return None
+        for formula in (expression, baseline):
+            if len(formula) > 180:
+                return None
+            tree = ast.parse(formula, mode="eval")
+            if len(list(ast.walk(tree))) > 60:
+                return None
+            _safe_formula(tree.body, {"x": 1, **parameters})
+    except (KeyError, TypeError, ValueError, SyntaxError, ArithmeticError, OverflowError):
+        return None
+    return {"expression": expression, "baseline": baseline, "x_start": start,
+            "x_stop": stop, "points": points, "parameters": parameters,
+            "hypothesis": str(data.get("hypothesis", ""))[:500],
+            "limitations": str(data.get("limitations", ""))[:500]}
+
+
+def _safe_formula(node: ast.AST, names: dict[str, float]) -> float:
+    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+        value = float(node.value)
+    elif isinstance(node, ast.Name) and node.id in names:
+        value = float(names[node.id])
+    elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = _safe_formula(node.operand, names) * (-1 if isinstance(node.op, ast.USub) else 1)
+    elif isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
+        left, right = _safe_formula(node.left, names), _safe_formula(node.right, names)
+        if isinstance(node.op, ast.Pow) and (abs(right) > 6 or abs(left) > 10000):
+            raise ValueError("exponent out of range")
+        value = _OPERATORS[type(node.op)](left, right)
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCTIONS and not node.keywords and len(node.args) == 1:
+        value = _FUNCTIONS[node.func.id](_safe_formula(node.args[0], names))
+    else:
+        raise ValueError("unsupported expression")
+    if not math.isfinite(value) or abs(value) > 1e12:
+        raise ValueError("non-finite result")
+    return value
+
+
+def run_simulation(project: Path, cycle: int, protocol: dict) -> dict:
+    """Evaluate two bounded formulas on the same grid; output is simulation only."""
+    xs = [protocol["x_start"] + (protocol["x_stop"] - protocol["x_start"]) * i / (protocol["points"] - 1)
+          for i in range(protocol["points"])]
+    rows = []
+    for x in xs:
+        names = {"x": x, **protocol["parameters"]}
+        try:
+            target = _safe_formula(ast.parse(protocol["expression"], mode="eval").body, names)
+            control = _safe_formula(ast.parse(protocol["baseline"], mode="eval").body, names)
+        except (ValueError, ArithmeticError, OverflowError) as exc:
+            raise ValueError("시뮬레이션 수식이 범위 안에서 계산되지 않습니다.") from exc
+        rows.append((x, target, control, target - control))
+    output = project / "datasets" / f"cycle_{cycle:02d}_simulated_data.csv"
+    with output.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["evidence", "x", "model_value", "baseline_value", "difference"])
+        writer.writerows(("SIMULATED_MODEL", *row) for row in rows)
+    result = {"evidence": "SIMULATED_MODEL", "cycle": cycle, "n": len(rows),
+              "mean_difference": round(statistics.mean(row[3] for row in rows), 6),
+              "max_absolute_difference": round(max(abs(row[3]) for row in rows), 6),
+              "protocol": protocol, "limitation": "수식에서 계산한 가상값이며 물리 실측 또는 외부 데이터가 아닙니다."}
+    (project / "results" / f"cycle_{cycle:02d}_analysis.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
 
 
 def decision(text: str, allowed: tuple[str, ...], default: str) -> str:
@@ -101,7 +194,7 @@ def write_pptx(path: Path, slides: list[tuple[str, list[str]]]) -> None:
             para.space_after = Pt(20)
         foot = slide.shapes.add_textbox(Inches(.95), Inches(7.02), Inches(11.5), Inches(.3))
         para = foot.text_frame.paragraphs[0]
-        para.text = f"AI R&E Lab  •  검토용 초안  •  {index + 1}/{len(slides)}"
+        para.text = f"과학 R&E Lab  •  검토용 초안  •  {index + 1}/{len(slides)}"
         para.font.name = "Malgun Gothic"; para.font.size = Pt(10)
         para.font.color.rgb = RGBColor(106, 119, 149)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,7 +207,7 @@ def write_presentation(project: Path, stage: str, text: str, topic: str, questio
     source = directory / "slides.md"
     source.write_text(text, encoding="utf-8")
     deck = directory / "slides.pptx"
-    write_pptx(deck, slides_from_text(text, title=topic or "AI R&E 연구", subtitle=question or "연구 질문 검토 중"))
+    write_pptx(deck, slides_from_text(text, title=topic or "과학고 R&E 연구", subtitle=question or "연구 질문 검토 중"))
     return [source.relative_to(project).as_posix(), deck.relative_to(project).as_posix()]
 
 
@@ -129,8 +222,8 @@ def write_report(project: Path, stage: str, text: str, topic: str) -> list[str]:
     section.left_margin = Cm(2.4); section.right_margin = Cm(2.4)
     normal = document.styles["Normal"]
     normal.font.name = "Malgun Gothic"; normal.font.size = DocPt(10.5)
-    document.add_heading(topic or "AI R&E 연구보고서", level=0)
-    document.add_paragraph("AI R&E Lab · 검토용 초안 · 실제 출처와 실험 결과는 승인 전에 확인 필요")
+    document.add_heading(topic or "과학고 R&E 연구보고서", level=0)
+    document.add_paragraph("과학 R&E Lab · 검토용 초안 · 실제 출처와 실험 결과는 승인 전에 확인 필요")
     for line in text.splitlines():
         clean = line.strip()
         if not clean:

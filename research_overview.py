@@ -16,6 +16,11 @@ PROVIDERS = ("gpt", "claude", "gemini", "grok")
 LABELS = {"gpt": "GPT", "claude": "Claude", "gemini": "Gemini", "grok": "Grok",
           "user": "1415", "friend": "1314", "member3": "1410", "member4": "1411"}
 GROUPS = {
+    "topic_proposal": ("topic", "주제 후보 제안·비판·투표"),
+    "topic_critique": ("topic", "주제 후보 제안·비판·투표"),
+    "topic_ballot": ("topic", "주제 후보 제안·비판·투표"),
+    "role_trial": ("roles", "역할 적합성 검증"),
+    "role_review": ("roles", "역할 적합성 검증"),
     "role_selection": ("roles", "역할 협의"),
     "topic_selection": ("topic", "주제 선정"),
     "plan_discussion": ("plan", "연구 계획·계획발표"),
@@ -26,6 +31,7 @@ GROUPS = {
     "experiment_cases": ("experiment", "실험·분석"),
     "experiment_run": ("experiment", "실험·분석"),
     "experiment_analysis": ("experiment", "실험·분석"),
+    "simulation_design": ("experiment", "실험·분석"),
     "middle_slides": ("middle", "중간발표"),
     "middle_script": ("middle", "중간발표"),
     "final_discussion": ("final", "최종 검증·최종발표"),
@@ -34,8 +40,14 @@ GROUPS = {
     "final_script": ("final", "최종 검증·최종발표"),
 }
 STAGE_TASKS = {
+    "topic_proposals": "네 모델이 서로의 제안을 보기 전에 AI·물리·수학·정보 주제를 독립적으로 제안합니다.",
+    "topic_critiques": "네 모델이 모든 후보의 방법·자료·실현 가능성을 비판하고 개선합니다.",
+    "topic_ballots": "네 모델이 후보를 독립적으로 순위 평가합니다.",
+    "role_trials": "선정된 주제에 대해 네 모델이 같은 작업 표본을 수행합니다.",
+    "role_reviews": "네 모델이 서로의 실제 작업 표본을 평가해 역할을 배정합니다.",
     "roles": "네 모델이 연구 역할을 협의하고 있습니다.",
-    "topic": "역할을 바탕으로 검증 가능한 AI 연구 주제를 선정하고 있습니다.",
+    "topic": "검증 가능한 AI·물리·수학·정보 연구 주제를 선정하고 있습니다.",
+    "simulation_design": "수식 기반 시뮬레이션을 설계하고 계산합니다.",
     "plan_discussion": "가설·변수·대조군·자료·일정을 토론하고 있습니다.",
     "plan_report": "연구계획보고서를 작성하고 있습니다.",
     "plan_slides": "계획발표 PPT를 작성하고 있습니다.",
@@ -116,7 +128,8 @@ def build_overview(transcript: Path | None, *, topic: str, question: str,
                  "highlights": [group["highlights"][name] for name in PROVIDERS if name in group["highlights"]]}
                 for group in groups.values()]
     current = current_model or (call_order[int(auto.get("speaker_index", 0)) % len(call_order)]
-                                if call_order and stage in ("roles", "topic", "plan_discussion",
+                                if call_order and stage in ("roles", "topic", "topic_proposals", "topic_critiques",
+                                                            "topic_ballots", "role_trials", "role_reviews", "plan_discussion",
                                                             "experiment_discussion", "final_discussion") else "")
     task = STAGE_TASKS.get(stage, "연구를 시작하면 현재 작업이 표시됩니다.")
     if status == "waiting_budget":
